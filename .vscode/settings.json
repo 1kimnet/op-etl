@@ -1,0 +1,5 @@
+environment:
+  pythonPath: "venv/bin/python"
+  pythonVersion: "3.8"
+  interpreterPath: "C:\\Users\\kije\\AppData\\Local\\ESRI\\conda\\envs\\arcgispro-py3-dev\\python.exe"
+  virtualEnvPath: "venv"
