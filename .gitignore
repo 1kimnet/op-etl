@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 .vscode
+/.vscode
 .env
 .venv
 .ipynb
