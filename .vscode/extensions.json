@@ -1,6 +1,7 @@
 {
     "recommendations": [
         "anthropic.claude-code",
-        "github.copilot"
+        "github.copilot",
+        "huggingface.huggingface"
     ]
 }
