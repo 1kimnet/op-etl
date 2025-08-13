@@ -27,6 +27,12 @@ share/python-wheels/
 MANIFEST
 .vscode
 /.vscode
+/downloads/
+/logs/
+/staging.gdb/
+__pycache__/
+*.pyc
+
 .env
 .venv
 .ipynb
@@ -35,6 +41,7 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+
 
 # Installer logs
 pip-log.txt
