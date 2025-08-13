@@ -1,0 +1,546 @@
+# Data sources configuration for ETL pipeline
+# This file defines all external data sources and their processing parameters
+#
+# Parameter Documentation:
+# - name: Human-readable source name (required)
+# - authority: Data authority acronym (required) 
+# - type: Handler type - file, rest_api, ogc_api, atom_feed (required)
+# - url: Data source URL (required)
+# - enabled: Whether source is active (default: true)
+# - staged_data_type: Expected data format - gpkg, geojson, shapefile_collection
+# - include: List of specific layers/collections to process
+# - download_format: File format hint for file sources (zip, gpkg, json)
+# - raw: Handler-specific configuration:
+#   - format: Output format for REST APIs (geojson, json)
+#   - layer_ids: Specific layer IDs for REST APIs (list of integers)
+#   - collections: Collection IDs for OGC APIs (list of strings)
+#   - page_size: Features per page for OGC APIs (integer, default: 1000)
+#   - supports_bbox_crs: Whether OGC service supports bbox-crs parameter (boolean)
+#   - where_clause: SQL filter for REST APIs (string, default: "1=1")
+#   - out_fields: Field selection for REST APIs (string, default: "*")
+#   - bbox: Custom bounding box for REST APIs (string)
+#   - bbox_sr: Spatial reference for bbox (string, default: "3006")
+
+sources:
+  # =============================================================================
+  # FM - Försvarsmakten (Swedish Armed Forces)
+  # =============================================================================
+  - name: "Försvarsmakten - Rikstäckande geodata"
+    authority: "FM"
+    type: "file"
+    url: "https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+
+  # =============================================================================
+  # NVV - Naturvårdsverket (Swedish Environmental Protection Agency)
+  # =============================================================================
+  - name: "Naturvårdsverket - Naturvårdsregistret"
+    authority: "NVV"
+    type: "file"
+    url: "https://geodata.naturvardsverket.se/nedladdning/naturvardsregistret/"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+    include:
+      - "Biosfarsomraden"
+      - "DVO"
+      - "HELCOM"
+      - "IF"
+      - "KR"
+      - "LBSO"
+      - "NP"
+      - "NR"
+      - "NVA"
+      - "NVO"
+      - "Nationalparksplan"
+      - "OBO"
+      - "OSPAR"
+      - "Ramsar_2018"
+      - "SCI_Rikstackande"
+      - "SPA_Rikstackande"
+      - "TILLTRADESFORBUD"
+      - "VSO"
+      - "Varldsarv"
+
+  # =============================================================================
+  # LST - Länsstyrelsen (County Administrative Board)
+  # =============================================================================
+  - name: "Miljöriskområde"
+    authority: "LST"
+    type: "atom_feed"
+    url: "https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.LST_Miljoriskomrade.xml"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "Vindkraftskollen: Vindkraftverk"
+    authority: "LST"
+    type: "atom_feed"
+    url: "https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_vindkraftverk.xml"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "Vindkraftskollen: Projekteringsområden"
+    authority: "LST"
+    type: "atom_feed"
+    url: "https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_projekteringsomraden.xml"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "Potentiellt förorenade områden"
+    authority: "LST"
+    type: "file"
+    url: "https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+
+  - name: "Riksintressen"
+    authority: "LST"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_4/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [0]
+
+  - name: "Riksintressen - Vindbruk"
+    authority: "LST"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_vindbruk_4/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  # =============================================================================
+  # LSTD - Länsstyrelsen Dalarna (County Administrative Board Dalarna)
+  # =============================================================================
+  - name: "LstD Föreskrifter"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Foreskrifter_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Fysisk planering"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Fysisk_planering_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Ett rikt odlingslandskap"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [2, 3, 4, 5, 6]
+
+  - name: "LstD Friluftsliv"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Friluftsliv_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [0, 1, 2, 3, 4]
+
+  - name: "LstD God bebyggd miljö"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_God_bebyggd_miljo_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Hav i balans"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Hav_i_balans_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Levande sjöar och vattendrag"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+
+  - name: "LstD Levande skogar"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_skogar_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [0]
+
+  - name: "LstD Klimat"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Klimat_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [2, 3, 4, 5, 6]
+
+  - name: "LstD Kulturmiljö"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Kulturmiljo_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [1]
+
+  - name: "LstD Markavvattning"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markavvattning_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [2, 3, 4, 5, 6]
+
+  - name: "LstD Markstabilitet"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markstabilitet_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Naturkartläggning"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Naturkartlaggning_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Skog och träd"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Skog_och_trad_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD GI Värdetrakter våtmark"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Myllrande_vatmarker_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "LstD Strandskydd"
+    authority: "LSTD"
+    type: "rest_api"
+    url: "https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Strandskydd_EXT/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  # =============================================================================
+  # MSB - Myndigheten för samhällsskydd och beredskap (Civil Contingencies Agency)
+  # =============================================================================
+  - name: "Skyddsrum"
+    authority: "MSB"
+    type: "file"
+    url: "https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+
+  # =============================================================================
+  # RAA - Riksantikvarieämbetet (Swedish National Heritage Board)
+  # =============================================================================
+  - name: "Riksintresse Kulturmiljövård MB3kap6"
+    authority: "RAA"
+    type: "atom_feed"
+    url: "https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_raa.RAA_RI_kulturmiljovard_MB3kap6.xml"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "RAA Byggnader Sverige"
+    authority: "RAA"
+    type: "file"
+    url: "https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnader_kulthist_inv/byggnader_sverige.gpkg"
+    enabled: true
+    staged_data_type: "gpkg"
+    include:
+      - "byggnader_sverige_point"
+
+  - name: "Enskilda och statliga byggnadsminnen, skyddsområden"
+    authority: "RAA"
+    type: "file"
+    url: "https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnadsminne_skyddsomr/skyddsomrade_byggnadsminne_sverige.gpkg"
+    enabled: true
+    staged_data_type: "gpkg"
+    include:
+      - "skyddsomrade_byggnadsminne_sverige_polygon"
+
+  - name: "Kulturhistoriska lämningar, Södermanland"
+    authority: "RAA"
+    type: "file"
+    url: "https://pub.raa.se/nedladdning/datauttag/lamningar/lan/l%C3%A4mningar_l%C3%A4n_s%C3%B6dermanland.gpkg"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "RAA Världsarv i Sverige"
+    authority: "RAA"
+    type: "file"
+    url: "https://pub.raa.se/nedladdning/datauttag/varldsarv/varldsarv_sverige.gpkg"
+    enabled: true
+    staged_data_type: "gpkg"
+    include:
+      - "varldsarv_sverige_polygon"
+
+  # =============================================================================
+  # SGI - Statens geotekniska institut (Swedish Geotechnical Institute)
+  # =============================================================================
+  - name: "Inträffade skred, ras och övriga jordrörelser (skreddatabas)"
+    authority: "SGI"
+    type: "file"
+    url: "https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+
+  # =============================================================================
+  # SGU - Sveriges geologiska undersökning (Geological Survey of Sweden)
+  # =============================================================================
+  - name: "Erosion"
+    authority: "SGU"
+    type: "ogc_api"
+    url: "https://api.sgu.se/oppnadata/stranderosion-kust/ogc/features/v1/collections/"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      collections: ["aktiv-erosion"]
+      page_size: 1000
+      supports_bbox_crs: true
+
+  - name: "Brunnar"
+    authority: "SGU"
+    type: "ogc_api"
+    url: "https://api.sgu.se/oppnadata/brunnar/ogc/features/v1/collections/"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      collections: ["brunnar"]
+      page_size: 1000
+      supports_bbox_crs: true
+
+  - name: "Jordskred och raviner"
+    authority: "SGU"
+    type: "ogc_api"
+    url: "https://api.sgu.se/oppnadata/jordskred-raviner/ogc/features/v1/collections/"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      collections: ["jordskred-raviner"]
+      page_size: 1000
+      supports_bbox_crs: true
+
+  - name: "Grus Krossberg"
+    authority: "SGU"
+    type: "ogc_api"
+    url: "https://api.sgu.se/oppnadata/grus-krossberg/ogc/features/v1/collections"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      collections: ["grus-grus", "grus-berg", "grus-moran"]
+      page_size: 1000
+      supports_bbox_crs: true
+
+  # =============================================================================
+  # SJV - Jordbruksverket (Swedish Board of Agriculture)
+  # =============================================================================
+  - name: "Jordbruksblock (2024)"
+    authority: "SJV"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04jbb/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [18]
+
+  - name: "Jordbruksskiften (senaste året)"
+    authority: "SJV"
+    type: "rest_api"
+    url: "https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json"
+    enabled: true
+    staged_data_type: "geojson"
+
+  - name: "Produktionsplatser för djurhållning"
+    authority: "SJV"
+    type: "rest_api"
+    url: "http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json"
+    enabled: true
+    staged_data_type: "geojson"
+
+  - name: "Ängs- och betesmarksinventeringen"
+    authority: "SJV"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04ovr/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [4, 5]
+
+  # =============================================================================
+  # SKS - Skogsstyrelsen (Swedish Forest Agency)
+  # =============================================================================
+  - name: "Naturvärden"
+    authority: "SKS"
+    type: "file"
+    url: "https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip"
+    enabled: true
+    staged_data_type: "gpkg"
+
+  - name: "Ras och skred"
+    authority: "SKS"
+    type: "atom_feed"
+    url: "https://geodpags.skogsstyrelsen.se/geodataport/feeds/Rasochskred.xml"
+    enabled: true
+    staged_data_type: "gpkg"
+    # NOTE: URL may not be available
+
+  - name: "Skogsstyrelsen - Biotopskydd (REST)"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaBiotopskydd/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Utförda avverkningar"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaUtfordavverkning/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Naturvårdsavtal"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNaturvardsavtal/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Återvätningsavtal"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAtervatningavtal/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Nyckelbiotoper"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNyckelbiotop/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Sumpskogar"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSumpskog/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Avverkningsanmälda områden"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAvverkningsanmalan/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Gräns för skogsskyddsbestämmelser"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsskyddsbestammelser/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  - name: "Nyckelbiotoper - storskogsbruket"
+    authority: "SKS"
+    type: "rest_api"
+    url: "https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsbruknyckelbiotop/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+
+  # =============================================================================
+  # SVK - Svenska kraftnät (Swedish National Grid)
+  # =============================================================================
+  - name: "Stamnät"
+    authority: "SVK"
+    type: "file"
+    url: "https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip"
+    enabled: true
+    staged_data_type: "shapefile_collection"
+
+  # =============================================================================
+  # TRV - Trafikverket (Swedish Transport Administration)
+  # =============================================================================
+  - name: "Vägar"
+    authority: "TRV"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak01/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"
+      layer_ids: [0, 1, 2, 3, 4, 5, 6, 7]
+
+  - name: "Övrigt"
+    authority: "TRV"
+    type: "rest_api"
+    url: "https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer"
+    enabled: true
+    staged_data_type: "geojson"
+    raw:
+      format: "geojson"

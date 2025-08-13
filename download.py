@@ -242,20 +242,20 @@ def run_download(sources_path: Path, downloads_root: Path, only: set[str] | None
 
 
 def main():
-    ap = argparse.ArgumentParser(description="OP-ETL step 1: download sources to authority folders.")
-    ap.add_argument("--sources", default="sources.yaml", help="Path to sources.yaml")
-    ap.add_argument("--downloads", default="downloads", help="Root downloads folder")
-    ap.add_argument("--only", nargs="*", help="Only run these source names (space-separated)")
-    ap.add_argument("--logcsv", default="logs/download.csv", help="CSV log output path")
-    args = ap.parse_args()
-
+    ap = argparse.ArgumentParser(description="OP-ETL step 1: download sources (bbox-ready)")
+    ap.add_argument("--sources", default="config/sources.yaml")  # moved into config/
+    ap.add_argument("--downloads", default="downloads")
+    ap.add_argument("--only", nargs="*")
+    ap.add_argument("--logcsv", default="logs/download.csv")
+    a = ap.parse_args()
     run_download(
-        sources_path=Path(args.sources),
-        downloads_root=Path(args.downloads),
-        only=set(args.only) if args.only else None,
-        log_csv=Path(args.logcsv) if args.logcsv else None,
+        sources_path=Path(a.sources),
+        downloads_root=Path(a.downloads),
+        only=set(a.only) if a.only else None,
+        log_csv=Path(a.logcsv) if a.logcsv else None,
     )
 
 
 if __name__ == "__main__":
+    main()
     main()
