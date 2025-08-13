@@ -220,6 +220,3 @@ __marimo__/
 
 #Ignore insiders AI rules
 .github\copilot-instructions.md
-.vscode/settings.json
-.vscode/extensions.json
-.vscode/settings.json
