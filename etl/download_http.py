@@ -187,8 +187,71 @@ def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
 
 
 # ---------- runner ----------
-def run_download(sources_path: Path, downloads_root: Path, only: set[str] | None = None, log_csv: Path | None = None):
-    srcs = load_sources_yaml(sources_path)
+def run(cfg: dict) -> None:
+    """Unified entrypoint that reads from merged cfg."""
+    raw_sources = cfg.get("sources", [])
+    downloads_dir = Path(cfg["workspaces"]["downloads"])
+
+    # Normalize sources to match the expected format from load_sources_yaml
+    normalized_sources = []
+    for i, src in enumerate(raw_sources):
+        if not isinstance(src, dict):
+            continue
+
+        # Normalize fields to match load_sources_yaml output
+        name = slug(str(src.get("name") or src.get("id") or f"src_{i}"))
+        stype = str(src.get("type") or "").strip().lower()
+        url = (src.get("url") or src.get("href") or "").strip()
+
+        # Type synonyms we will likely see
+        if stype in ("http", "file", "http_file", "download"):
+            stype = "http"
+        elif stype in ("rest", "rest_api", "esri_rest", "arcgis_rest"):
+            stype = "rest"
+        elif stype in ("ogc", "ogc_api", "ogc_features", "ogc_api_features"):
+            stype = "ogc"
+        elif stype in ("atom", "atom_feed", "rss"):
+            stype = "atom"
+
+        # Handle enabled/include field
+        include = src.get("include", src.get("enabled", True))
+        if isinstance(include, str):
+            include = include.strip().lower() in ("1", "true", "yes", "y")
+
+        # Authority: explicit or inferred from name prefix up to first underscore
+        authority = slug(str(src.get("authority") or name.split("_", 1)[0]))
+
+        # Anything else we keep for later stages
+        extra = {k: v for k, v in src.items()
+                if k not in {"name", "id", "type", "href", "url", "include", "enabled", "authority"}}
+
+        normalized_sources.append({
+            "name": name,
+            "type": stype,
+            "url": url,
+            "include": bool(include),
+            "authority": authority,
+            "extra": extra,
+            "_raw_index": i,
+        })
+
+    # Reuse existing implementation
+    run_download(normalized_sources, downloads_dir)
+
+def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = None, log_csv: Path | None = None):
+    """
+    Backward-compatible:
+    - If sources_or_path is a path-like, load YAML from file.
+    - If it's already a list[dict], use it as-is.
+    """
+    if isinstance(sources_or_path, (str, Path)):
+        srcs = load_sources_yaml(Path(sources_or_path))
+    elif isinstance(sources_or_path, list):
+        # Filter to file/HTTP-like sources since this is download_http
+        srcs = [s for s in sources_or_path if s.get("type") in {"http", "file", "atom_feed", "atom"}]
+    else:
+        raise TypeError("run_download expects a path or a list of source dicts")
+
     ensure_dir(downloads_root)
 
     if log_csv:
@@ -249,7 +312,7 @@ def main():
     ap.add_argument("--logcsv", default="logs/download.csv")
     a = ap.parse_args()
     run_download(
-        sources_path=Path(a.sources),
+        sources_or_path=Path(a.sources),
         downloads_root=Path(a.downloads),
         only=set(a.only) if a.only else None,
         log_csv=Path(a.logcsv) if a.logcsv else None,

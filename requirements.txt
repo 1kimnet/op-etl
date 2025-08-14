@@ -1,0 +1,29 @@
+# Core dependencies for OP-ETL Geospatial Data Pipeline
+# This file defines the Python packages required for the ETL project
+
+# YAML configuration parsing
+PyYAML>=6.0.1
+
+# HTTP requests and REST API interactions
+requests>=2.31.0
+
+# Optional: Environment variable management
+python-dotenv>=1.0.0
+
+# Geospatial data processing (if not using ArcGIS Pro environment)
+# Note: When running in ArcGIS Pro environment, these are already available
+# Uncomment if running outside ArcGIS Pro:
+# geopandas>=0.14.0
+# fiona>=1.9.0
+# shapely>=2.0.0
+
+# Development and testing dependencies (optional)
+# Uncomment for development:
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.10.0
+# flake8>=7.0.0
+
+# Security scanning (for CI/CD)
+# safety>=2.3.0
+# bandit>=1.7.0

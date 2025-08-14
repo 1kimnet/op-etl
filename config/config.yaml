@@ -1,6 +1,11 @@
 # ETL Pipeline Global Configuration
 # This is the main configuration file for the ETL pipeline
-
+workspaces:
+  downloads: ./downloads
+  staging_gdb: ./staging.gdb
+  sde_conn: C:/path/to/your.sde
+# geoprocess:
+#   enabled: false
 # Environment settings (can be overridden by ETL_ENVIRONMENT variable)
 environment: "development"  # Options: development, staging, production
 debug: false
@@ -44,45 +49,45 @@ processing:
   memory_limit_mb: 1024
   enable_caching: true
   cache_ttl_hours: 24
-  
+
 # Performance and parallel processing settings
 performance:
   # Enable parallel SDE loading (processes multiple feature classes simultaneously)
   parallel_sde_loading: true
-  
+
   # Number of workers for parallel operations
   parallel_workers: 2
-  
+
   # HTTP connection pooling settings
   connection_pool:
     pool_connections: 10
     pool_maxsize: 20
     max_retries: 3
     backoff_factor: 0.3
-  
+
   # Response caching settings
   response_cache:
     max_size: 1000
     default_ttl: 3600  # 1 hour
     max_response_size_mb: 10
-  
+
   # Memory management settings
   memory_management:
     memory_limit_mb: 1024
     chunk_size_mb: 50
     enable_chunked_processing: true
-    
+
 # Monitoring and metrics configuration
 monitoring:
   # Enable structured JSON logging
   structured_logging: true
-  
+
   # Metrics collection settings
   metrics:
     enabled: true
     max_points: 10000
     retention_hours: 168  # 1 week
-    
+
   # Health monitoring settings
   health_checks:
     enabled: true
@@ -92,7 +97,7 @@ monitoring:
 
 # Data validation configuration
 validation:
-  strict_modeQ: false
+  strict_mode: false
   schema_validation: true
   geometry_validation: true
   attribute_validation: true
@@ -126,8 +131,9 @@ continue_on_failure: true
 
 # Optional: Define a global BBOX here if use_bbox_filter is true
 # These would be used if a source of type 'rest_api' doesn't define its own bbox in sources.yaml
-global_ogc_bbox_coords: "16.5008129,59.0906713,17.6220373,59.6050281"
-global_ogc_bbox_crs_uri: "CRS84"  # or "4326"
+global_ogc_bbox:
+  coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]
+  crs: "CRS84"
 ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
 
 # SDE loading settings
@@ -141,13 +147,13 @@ geoprocessing:
   enabled: true
   aoi_boundary: "data/connections/municipality_boundary.shp"
   target_srid: 3010
-  parallel_processing_factor: "100"
+  parallel_processing_factor: "100%"
   cleanup_intermediate: true  # Remove processed GDBs after SDE load
 
 # Optional: Source-specific SDE overrides
 # source_overrides:
 #   - name: "Riksintressen"
-#     authority: "LST" 
+#     authority: "LST"
 #     sde_dataset: "LST"
 #     sde_fc: "Riksintressen"
 #     sde_schema: "GNG"  # Optional, defaults to GNG

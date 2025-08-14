@@ -32,7 +32,9 @@ MANIFEST
 /staging.gdb/
 __pycache__/
 *.pyc
-
+/_data/connections/
+/scripts/
+_downloads/
 .env
 .venv
 .ipynb
@@ -220,3 +222,4 @@ __marimo__/
 
 #Ignore insiders AI rules
 .github\copilot-instructions.md
+_scripts/create_sde_connection.py

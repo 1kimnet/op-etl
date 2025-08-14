@@ -1,25 +1,5 @@
-# Data sources configuration for ETL pipeline
-# This file defines all external data sources and their processing parameters
-#
-# Parameter Documentation:
-# - name: Human-readable source name (required)
-# - authority: Data authority acronym (required) 
-# - type: Handler type - file, rest_api, ogc_api, atom_feed (required)
-# - url: Data source URL (required)
-# - enabled: Whether source is active (default: true)
-# - staged_data_type: Expected data format - gpkg, geojson, shapefile_collection
-# - include: List of specific layers/collections to process
-# - download_format: File format hint for file sources (zip, gpkg, json)
-# - raw: Handler-specific configuration:
-#   - format: Output format for REST APIs (geojson, json)
-#   - layer_ids: Specific layer IDs for REST APIs (list of integers)
-#   - collections: Collection IDs for OGC APIs (list of strings)
-#   - page_size: Features per page for OGC APIs (integer, default: 1000)
-#   - supports_bbox_crs: Whether OGC service supports bbox-crs parameter (boolean)
-#   - where_clause: SQL filter for REST APIs (string, default: "1=1")
-#   - out_fields: Field selection for REST APIs (string, default: "*")
-#   - bbox: Custom bounding box for REST APIs (string)
-#   - bbox_sr: Spatial reference for bbox (string, default: "3006")
+# Normalized data sources according to the project template
+# Only template-supported keys are used. Optional hints (download_format, where_clause, etc.) are kept under raw when relevant.
 
 sources:
   # =============================================================================
@@ -31,6 +11,7 @@ sources:
     url: "https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip"
     enabled: true
     staged_data_type: "shapefile_collection"
+    download_format: "zip"
 
   # =============================================================================
   # NVV - Naturvårdsverket (Swedish Environmental Protection Agency)
@@ -92,6 +73,7 @@ sources:
     url: "https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip"
     enabled: true
     staged_data_type: "shapefile_collection"
+    download_format: "zip"
 
   - name: "Riksintressen"
     authority: "LST"
@@ -267,7 +249,7 @@ sources:
       format: "geojson"
 
   # =============================================================================
-  # MSB - Myndigheten för samhällsskydd och beredskap (Civil Contingencies Agency)
+  # MSB - Myndigheten för samhällsskydd och beredskap
   # =============================================================================
   - name: "Skyddsrum"
     authority: "MSB"
@@ -275,9 +257,10 @@ sources:
     url: "https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip"
     enabled: true
     staged_data_type: "shapefile_collection"
+    download_format: "zip"
 
   # =============================================================================
-  # RAA - Riksantikvarieämbetet (Swedish National Heritage Board)
+  # RAA - Riksantikvarieämbetet
   # =============================================================================
   - name: "Riksintresse Kulturmiljövård MB3kap6"
     authority: "RAA"
@@ -292,6 +275,7 @@ sources:
     url: "https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnader_kulthist_inv/byggnader_sverige.gpkg"
     enabled: true
     staged_data_type: "gpkg"
+    download_format: "gpkg"
     include:
       - "byggnader_sverige_point"
 
@@ -301,6 +285,7 @@ sources:
     url: "https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnadsminne_skyddsomr/skyddsomrade_byggnadsminne_sverige.gpkg"
     enabled: true
     staged_data_type: "gpkg"
+    download_format: "gpkg"
     include:
       - "skyddsomrade_byggnadsminne_sverige_polygon"
 
@@ -310,6 +295,7 @@ sources:
     url: "https://pub.raa.se/nedladdning/datauttag/lamningar/lan/l%C3%A4mningar_l%C3%A4n_s%C3%B6dermanland.gpkg"
     enabled: true
     staged_data_type: "gpkg"
+    download_format: "gpkg"
 
   - name: "RAA Världsarv i Sverige"
     authority: "RAA"
@@ -317,11 +303,12 @@ sources:
     url: "https://pub.raa.se/nedladdning/datauttag/varldsarv/varldsarv_sverige.gpkg"
     enabled: true
     staged_data_type: "gpkg"
+    download_format: "gpkg"
     include:
       - "varldsarv_sverige_polygon"
 
   # =============================================================================
-  # SGI - Statens geotekniska institut (Swedish Geotechnical Institute)
+  # SGI - Statens geotekniska institut
   # =============================================================================
   - name: "Inträffade skred, ras och övriga jordrörelser (skreddatabas)"
     authority: "SGI"
@@ -329,9 +316,10 @@ sources:
     url: "https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip"
     enabled: true
     staged_data_type: "shapefile_collection"
+    download_format: "zip"
 
   # =============================================================================
-  # SGU - Sveriges geologiska undersökning (Geological Survey of Sweden)
+  # SGU - Sveriges geologiska undersökning
   # =============================================================================
   - name: "Erosion"
     authority: "SGU"
@@ -378,7 +366,7 @@ sources:
       supports_bbox_crs: true
 
   # =============================================================================
-  # SJV - Jordbruksverket (Swedish Board of Agriculture)
+  # SJV - Jordbruksverket
   # =============================================================================
   - name: "Jordbruksblock (2024)"
     authority: "SJV"
@@ -396,6 +384,8 @@ sources:
     url: "https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json"
     enabled: true
     staged_data_type: "geojson"
+    raw:
+      format: "geojson"
 
   - name: "Produktionsplatser för djurhållning"
     authority: "SJV"
@@ -403,6 +393,8 @@ sources:
     url: "http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json"
     enabled: true
     staged_data_type: "geojson"
+    raw:
+      format: "geojson"
 
   - name: "Ängs- och betesmarksinventeringen"
     authority: "SJV"
@@ -423,6 +415,7 @@ sources:
     url: "https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip"
     enabled: true
     staged_data_type: "gpkg"
+    download_format: "zip"
 
   - name: "Ras och skred"
     authority: "SKS"
@@ -522,6 +515,7 @@ sources:
     url: "https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip"
     enabled: true
     staged_data_type: "shapefile_collection"
+    download_format: "zip"
 
   # =============================================================================
   # TRV - Trafikverket (Swedish Transport Administration)
