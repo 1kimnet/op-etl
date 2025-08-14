@@ -1,4 +1,5 @@
 # etl/process.py
+import logging
 import arcpy
 
 def run(cfg):
@@ -27,4 +28,4 @@ def run(cfg):
         if src == tmp:
             arcpy.management.Delete(tmp)
 
-        print(f"[PROCESS] {in_fc} processed")
+        logging.info(f"[PROCESS] {in_fc} processed")

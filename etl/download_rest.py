@@ -1,4 +1,5 @@
 # etl/download_rest.py
+import logging
 import arcpy
 from arcgis.features import FeatureLayer
 from arcgis.geometry import Geometry
@@ -35,4 +36,4 @@ def run(cfg):
                 geom = Geometry({"xmin":xmin,"ymin":ymin,"xmax":xmax,"ymax":ymax,"spatialReference":{"wkid":wkid}})
             out_fc = staging_path(cfg, s.get("out_name") or fl.properties.name)
             count = _query_to_fgdb(fl, where, geom, out_fc)
-            print(f"[REST] {url} -> {out_fc} features={count}")
+            logging.info(f"[REST] {url} -> {out_fc} features={count}")

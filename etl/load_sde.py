@@ -1,4 +1,5 @@
 # etl/load_sde.py
+import logging
 import arcpy
 
 def run(cfg):
@@ -15,4 +16,4 @@ def run(cfg):
             arcpy.management.TruncateTable(dest)
 
         arcpy.management.Append(inputs=src, target=dest, schema_type="NO_TEST")
-        print(f"[LOAD] {src} -> {dest}")
+        logging.info(f"[LOAD] {src} -> {dest}")

@@ -11,6 +11,7 @@ Dependencies: PyYAML, requests (bundled with ArcGIS Pro), stdlib
 
 import argparse
 import csv
+import logging
 import re
 import sys
 import time
@@ -238,7 +239,7 @@ def run(cfg: dict) -> None:
     # Reuse existing implementation
     run_download(normalized_sources, downloads_dir)
 
-def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = None, log_csv: Path | None = None):
+def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = None):
     """
     Backward-compatible:
     - If sources_or_path is a path-like, load YAML from file.
@@ -254,27 +255,11 @@ def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = 
 
     ensure_dir(downloads_root)
 
-    if log_csv:
-        ensure_dir(log_csv.parent)
-        log_f = open(log_csv, "w", newline="", encoding="utf-8")
-        writer = csv.writer(log_f)
-        writer.writerow(["when", "source", "type", "authority", "status", "path_or_msg", "seconds"])
-    else:
-        writer = None
-        log_f = None
-
-    def _log(row):
-        if writer:
-            writer.writerow(row)
-            log_f.flush()  # type: ignore
-        else:
-            print(" | ".join(str(x) for x in row))
-
     for s in srcs:
         if only and s["name"] not in only:
             continue
         if not s["include"]:
-            _log([datetime.now().isoformat(timespec="seconds"), s["name"], s["type"], s["authority"], "SKIP", "include=false", 0])
+            logging.info(f"Skipping {s['name']} (include=false)")
             continue
 
         t0 = time.time()
@@ -294,14 +279,11 @@ def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = 
                 status = "SKIP"
 
             dt = round(time.time() - t0, 2)
-            _log([datetime.now().isoformat(timespec="seconds"), s["name"], s["type"], s["authority"], status, msg_path, dt])
+            logging.info(f"{s['name']} ({s['type']}): {status} in {dt}s. Path: {msg_path}")
 
         except Exception as e:
             dt = round(time.time() - t0, 2)
-            _log([datetime.now().isoformat(timespec="seconds"), s["name"], s["type"], s["authority"], "FAIL", str(e), dt])
-
-    if log_f:
-        log_f.close()
+            logging.error(f"{s['name']} ({s['type']}): FAIL in {dt}s. Error: {e}")
 
 
 def main():
@@ -309,13 +291,11 @@ def main():
     ap.add_argument("--sources", default="config/sources.yaml")  # moved into config/
     ap.add_argument("--downloads", default="downloads")
     ap.add_argument("--only", nargs="*")
-    ap.add_argument("--logcsv", default="logs/download.csv")
     a = ap.parse_args()
     run_download(
         sources_or_path=Path(a.sources),
         downloads_root=Path(a.downloads),
         only=set(a.only) if a.only else None,
-        log_csv=Path(a.logcsv) if a.logcsv else None,
     )
 
 
