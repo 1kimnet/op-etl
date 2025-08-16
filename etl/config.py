@@ -101,3 +101,44 @@ def load_config(
         val["strict_mode"] = val.pop("strict_modeQ")
 
     return cfg
+
+
+def normalize_sources(cfg: dict) -> list[dict]:
+    norm = []
+    for s in cfg.get("sources", []):
+        # enable flag
+        if not s.get("enabled", True):
+            continue
+
+        t = s.get("type")
+        out = {
+            "name": s.get("name"),
+            "authority": s.get("authority"),
+            "type": t,                               # file | rest_api | ogc_api | atom_feed
+            "url": s.get("url"),
+            "staged_data_type": s.get("staged_data_type"),
+            "include": s.get("include") or [],
+            "download_format": s.get("download_format"),
+            "raw": s.get("raw", {}) or {},
+        }
+
+        # normalize rest_api details
+        if t == "rest_api":
+            r = out["raw"]
+            r.setdefault("format", "json")           # don't rely on geojson unless verified
+            r.setdefault("where_clause", "1=1")
+            r.setdefault("out_fields", "*")
+            if "bbox" in r and isinstance(r["bbox"], str):
+                r["bbox"] = [float(x) for x in r["bbox"].split(",")]
+
+        # normalize ogc_api details
+        if t == "ogc_api":
+            r = out["raw"]
+            r.setdefault("collections", [])
+            r.setdefault("page_size", 1000)
+            r.setdefault("supports_bbox_crs", True)
+
+        norm.append(out)
+
+    cfg["sources"] = norm
+    return norm

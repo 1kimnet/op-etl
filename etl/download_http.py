@@ -10,7 +10,6 @@ Dependencies: PyYAML, requests (bundled with ArcGIS Pro), stdlib
 """
 
 import argparse
-import csv
 import logging
 import re
 import sys
@@ -98,7 +97,7 @@ def load_sources_yaml(path: Path):
 
         # type synonyms we will likely see
         if stype in ("http", "file", "http_file", "download"):
-            stype = "http"
+            stype = "http" if stype != "file" else "file"
         elif stype in ("rest", "rest_api", "esri_rest", "arcgis_rest"):
             stype = "rest"
         elif stype in ("ogc", "ogc_api", "ogc_features", "ogc_api_features"):
@@ -192,6 +191,7 @@ def run(cfg: dict) -> None:
     """Unified entrypoint that reads from merged cfg."""
     raw_sources = cfg.get("sources", [])
     downloads_dir = Path(cfg["workspaces"]["downloads"])
+    ensure_dir(downloads_dir)
 
     # Normalize sources to match the expected format from load_sources_yaml
     normalized_sources = []
@@ -206,7 +206,7 @@ def run(cfg: dict) -> None:
 
         # Type synonyms we will likely see
         if stype in ("http", "file", "http_file", "download"):
-            stype = "http"
+            stype = "http" if stype != "file" else "file"
         elif stype in ("rest", "rest_api", "esri_rest", "arcgis_rest"):
             stype = "rest"
         elif stype in ("ogc", "ogc_api", "ogc_features", "ogc_api_features"):
@@ -224,7 +224,7 @@ def run(cfg: dict) -> None:
 
         # Anything else we keep for later stages
         extra = {k: v for k, v in src.items()
-                if k not in {"name", "id", "type", "href", "url", "include", "enabled", "authority"}}
+                 if k not in {"name", "id", "type", "href", "url", "include", "enabled", "authority"}}
 
         normalized_sources.append({
             "name": name,
@@ -236,35 +236,17 @@ def run(cfg: dict) -> None:
             "_raw_index": i,
         })
 
-    # Reuse existing implementation
-    run_download(normalized_sources, downloads_dir)
-
-def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = None):
-    """
-    Backward-compatible:
-    - If sources_or_path is a path-like, load YAML from file.
-    - If it's already a list[dict], use it as-is.
-    """
-    if isinstance(sources_or_path, (str, Path)):
-        srcs = load_sources_yaml(Path(sources_or_path))
-    elif isinstance(sources_or_path, list):
-        # Filter to file/HTTP-like sources since this is download_http
-        srcs = [s for s in sources_or_path if s.get("type") in {"http", "file", "atom_feed", "atom"}]
-    else:
-        raise TypeError("run_download expects a path or a list of source dicts")
-
-    ensure_dir(downloads_root)
+    # Filter to file/HTTP-like sources since this is download_http
+    srcs = [s for s in normalized_sources if s.get("type") in {"http", "file", "atom_feed", "atom"}]
 
     for s in srcs:
-        if only and s["name"] not in only:
-            continue
         if not s["include"]:
             logging.info(f"Skipping {s['name']} (include=false)")
             continue
 
         t0 = time.time()
         try:
-            auth_dir = ensure_dir(downloads_root / s["authority"])
+            auth_dir = ensure_dir(downloads_dir / s["authority"])
             if s["type"] == "http":
                 file_path = http_download(s["url"], auth_dir, s["name"])
                 extracted = maybe_unzip(file_path, auth_dir)
@@ -286,18 +268,54 @@ def run_download(sources_or_path, downloads_root: Path, only: set[str] | None = 
             logging.error(f"{s['name']} ({s['type']}): FAIL in {dt}s. Error: {e}")
 
 
+def run_download(sources_or_path, downloads_dir):
+    # deprecation shim
+    import warnings
+    warnings.warn("run_download is deprecated; use run(cfg)", DeprecationWarning)
+    # build a tiny cfg and call run(...)
+    if isinstance(sources_or_path, list):
+        cfg = {"sources": sources_or_path, "workspaces": {"downloads": downloads_dir}}
+    else:
+        from pathlib import Path
+        path = Path(sources_or_path)
+        srcs = yaml.safe_load(path.read_text(encoding="utf-8"))["sources"]
+        cfg = {"sources": srcs, "workspaces": {"downloads": downloads_dir}}
+    return run(cfg)
+
+
 def main():
     ap = argparse.ArgumentParser(description="OP-ETL step 1: download sources (bbox-ready)")
     ap.add_argument("--sources", default="config/sources.yaml")  # moved into config/
     ap.add_argument("--downloads", default="downloads")
-    ap.add_argument("--only", nargs="*")
     a = ap.parse_args()
     run_download(
         sources_or_path=Path(a.sources),
-        downloads_root=Path(a.downloads),
-        only=set(a.only) if a.only else None,
+        downloads_dir=Path(a.downloads),
     )
 
+
+# Create a requests session with retries and user-agent
+session = requests.Session()
+adapter = requests.adapters.HTTPAdapter(max_retries=3)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+HEADERS = {"User-Agent": "op-etl/0.1 (+contact@example.org)"}
+
+def query_all(fl, where="1=1", geom=None, out_sr=None, page_size=2000):
+    start = 0
+    while True:
+        fs = fl.query(where=where, geometry_filter=geom, out_fields="*",
+                      result_offset=start, result_record_count=page_size, out_sr=out_sr)
+        if not fs or len(fs) == 0:
+            break
+        yield fs
+        if len(fs) < page_size:
+            break
+        start += page_size
+
+# Atom feed handler stub
+def handle_atom_feed(feed_url):
+    logging.info("[ATOM] Skipped handling feed: %s", feed_url)
 
 if __name__ == "__main__":
     main()

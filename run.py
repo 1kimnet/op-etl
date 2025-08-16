@@ -21,6 +21,9 @@ def main():
     p.add_argument("--download", action="store_true")
     p.add_argument("--process", action="store_true")
     p.add_argument("--load_sde", action="store_true")
+    p.add_argument("--authority", help="Filter by authority")
+    p.add_argument("--type", help="Filter by source type (e.g., rest_api)")
+    p.add_argument("--plan", action="store_true", help="Dry-run mode: print planned actions")
     args = p.parse_args()
 
     try:
