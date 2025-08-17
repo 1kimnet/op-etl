@@ -10,6 +10,7 @@ Dependencies: PyYAML, requests (bundled with ArcGIS Pro), stdlib
 """
 
 import argparse
+import importlib
 import logging
 import re
 import sys
@@ -157,12 +158,25 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
     tries, last_err = 3, None
     for _ in range(tries):
         try:
-            with requests.get(url, stream=True, timeout=(10, 120)) as r:
-                r.raise_for_status()
-                with open(dst, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 256):
-                        if chunk:
-                            f.write(chunk)
+            # Prefer session if available (with headers + timeout), else fallback to module-level get
+            if session is not None:
+                with session.get(url, stream=True, timeout=(10, 120), headers=HEADERS) as r:
+                    r.raise_for_status()
+                    with open(dst, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 256):
+                            if chunk:
+                                f.write(chunk)
+            else:
+                if requests_get is None:
+                    # requests module unavailable or dynamic import failed
+                    raise RuntimeError("HTTP client not available: 'requests' is missing or unusable")
+                # use the module-level get function we captured earlier
+                with requests_get(url, stream=True, timeout=(10, 120), headers=HEADERS) as r:
+                    r.raise_for_status()
+                    with open(dst, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 256):
+                            if chunk:
+                                f.write(chunk)
             return dst
         except Exception as e:
             last_err = e
@@ -294,12 +308,33 @@ def main():
     )
 
 
-# Create a requests session with retries and user-agent
-session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(max_retries=3)
-session.mount("http://", adapter)
-session.mount("https://", adapter)
+# Create a requests session with retries and user-agent (guarded and linter-friendly)
+session = None
+requests_get = None
 HEADERS = {"User-Agent": "op-etl/0.1 (+contact@example.org)"}
+
+if requests is not None:
+    try:
+        # import adapters module separately to avoid attribute access on a possibly-None 'requests'
+        adapters = importlib.import_module("requests.adapters")
+        HTTPAdapter = getattr(adapters, "HTTPAdapter")
+
+        # create a session and mount adapters
+        session = requests.Session()
+        adapter = HTTPAdapter(max_retries=3)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        # keep a direct reference to the module-level get for the fallback
+        requests_get = getattr(requests, "get", None)
+    except Exception:
+        # best-effort: leave session/request_get as None and fall back to raising meaningful errors later
+        session = None
+        requests_get = None
+else:
+    session = None
+    requests_get = None
+
 
 def query_all(fl, where="1=1", geom=None, out_sr=None, page_size=2000):
     start = 0
