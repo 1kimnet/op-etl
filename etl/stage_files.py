@@ -17,11 +17,33 @@ from .paths import staging_path
 
 def _find_latest_file(download_dir: Path, pattern: str):
     # Find latest file matching a simple glob pattern (pattern can be '*' or name stem)
+    """
+    Return the most recently modified file in download_dir that matches the given glob pattern.
+
+    Pattern is a pathlib-style glob (e.g. '*.zip', 'mystem*.gpkg', or a literal filename) evaluated against download_dir. Returns the Path to the newest matching file, or None if no matches are found.
+    """
     files = sorted(download_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
     return files[0] if files else None
 
 
-def _import_shapefile(shp_path: Path, cfg: dict, out_name: str) -> bool:
+def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
+    """
+    Import a .shp file into the staging geodatabase and overwrite any existing target.
+
+    Detailed description:
+    - Computes the destination feature class using staging_path(cfg, out_name).
+    - Attempts a best-effort delete of an existing target before importing.
+    - Converts the input shapefile into a feature class at the staging destination using ArcPy.
+    - Catches errors and returns a boolean status rather than raising.
+
+    Parameters:
+        shp_path (Path): Path to the source .shp file.
+        cfg (dict): Configuration mapping (used to resolve the staging path).
+        out_name (str): Logical name for the output feature class in the staging geodatabase.
+
+    Returns:
+        bool: True if the shapefile was imported successfully; False on failure.
+    """
     out_fc = staging_path(cfg, out_name)
     try:
         # Remove existing target if present (overwrite behavior)
@@ -45,6 +67,17 @@ def _import_shapefile(shp_path: Path, cfg: dict, out_name: str) -> bool:
 
 
 def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | None = None) -> bool:
+    """
+    Import a GeoPackage into the staging dataset at the path derived from cfg and out_name.
+
+    Attempts to remove any existing target (best-effort) then copies either the whole GeoPackage (first layer) or a specific layer if layer_name is provided into staging_path(cfg, out_name).
+
+    Parameters:
+        layer_name (str | None): Optional exact layer name inside the GeoPackage to import. If omitted, the GeoPackage path is used and the first layer is imported.
+
+    Returns:
+        bool: True on successful import, False on any failure.
+    """
     out_fc = staging_path(cfg, out_name)
     try:
         # Remove existing target if present (overwrite behavior)
@@ -67,6 +100,36 @@ def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | No
         return False
 
 
+def ingest_downloads(cfg: dict) -> None:
+    """
+    Ingest downloaded file-based sources from the configured downloads workspace into the staging dataset.
+
+    Processes sources in cfg['sources'] that are included and of type 'file' or 'http'. For each source it:
+    - Locates the latest matching downloaded file in downloads/<authority> by trying stem-based and generic patterns (*.zip, *.gpkg, *.shp).
+    - Supports ZIP archives (prefers a hinted shapefile or single shapefile, or contained GeoPackage(s) with optional layer hints), GeoPackage (.gpkg) files (optionally importing a named layer), and single shapefiles (.shp).
+    - Extracts ZIP contents to a sibling directory when needed and delegates ingestion to _import_shapefile or _import_gpkg.
+    - Skips ambiguous archives or unsupported file types and continues on errors (errors are logged).
+
+    Parameters:
+        cfg (dict): Configuration containing at least:
+            - workspaces: a mapping with 'downloads' pointing to the downloads directory.
+            - sources: an iterable of source definitions; relevant source keys:
+                - include (bool or list): whether to process the source (and optionally a shapefile name hint).
+                - type (str): must be 'file' or 'http' to be processed.
+                - authority (str): subdirectory under downloads where files are expected.
+                - name (str): human-readable name used in logs.
+                - out_name (str): target staging feature name (passed to import helpers).
+                - raw (dict): optional, may contain 'layer_name' or 'layer' to prefer a specific layer inside a GeoPackage or ZIP.
+
+    Returns:
+        None
+    """
+    downloads = Path(cfg['workspaces']['downloads'])
+    for s in cfg.get('sources', []):
+        if not s.get('include', True):
+            continue
+        if s.get('type') not in ('file', 'http'):
+            continue
 def _extract_hints(source: dict) -> tuple[str | None, str | None]:
     """Extract and normalize include and layer hints from source configuration."""
     include_hint = source.get('include')

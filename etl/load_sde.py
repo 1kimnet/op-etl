@@ -3,6 +3,24 @@ import logging
 import arcpy
 
 def run(cfg):
+    """
+    Load feature classes from a staging geodatabase into an SDE connection.
+    
+    Processes each source listed in cfg["sources"] (a list of dicts with at least "out_name" and optional "include" boolean). For each included source this function:
+    - Builds src as "{staging_gdb}/{out_name}" and dest as "{sde_conn}/{out_name}".
+    - Skips the source if the src does not exist in the staging GDB (logs a warning).
+    - If dest does not exist in SDE, creates an empty feature class in SDE using the source as a template and preserving geometry type and spatial reference.
+    - If dest exists, truncates it.
+    - Appends all features from src to dest with schema_type="NO_TEST" and logs an info message.
+    
+    Parameters:
+        cfg (dict): Configuration mapping. Required keys:
+            - "workspaces": dict containing "sde_conn" (SDE connection path) and "staging_gdb" (staging geodatabase path).
+            - "sources": optional list of source dicts; each source must include "out_name" (feature class name) and may include "include" (bool).
+    
+    Returns:
+        None
+    """
     sde = cfg["workspaces"]["sde_conn"]
     for s in cfg.get("sources", []):
         if not s.get("include", True):
