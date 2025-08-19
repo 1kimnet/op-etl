@@ -100,36 +100,6 @@ def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | No
         return False
 
 
-def ingest_downloads(cfg: dict) -> None:
-    """
-    Ingest downloaded file-based sources from the configured downloads workspace into the staging dataset.
-
-    Processes sources in cfg['sources'] that are included and of type 'file' or 'http'. For each source it:
-    - Locates the latest matching downloaded file in downloads/<authority> by trying stem-based and generic patterns (*.zip, *.gpkg, *.shp).
-    - Supports ZIP archives (prefers a hinted shapefile or single shapefile, or contained GeoPackage(s) with optional layer hints), GeoPackage (.gpkg) files (optionally importing a named layer), and single shapefiles (.shp).
-    - Extracts ZIP contents to a sibling directory when needed and delegates ingestion to _import_shapefile or _import_gpkg.
-    - Skips ambiguous archives or unsupported file types and continues on errors (errors are logged).
-
-    Parameters:
-        cfg (dict): Configuration containing at least:
-            - workspaces: a mapping with 'downloads' pointing to the downloads directory.
-            - sources: an iterable of source definitions; relevant source keys:
-                - include (bool or list): whether to process the source (and optionally a shapefile name hint).
-                - type (str): must be 'file' or 'http' to be processed.
-                - authority (str): subdirectory under downloads where files are expected.
-                - name (str): human-readable name used in logs.
-                - out_name (str): target staging feature name (passed to import helpers).
-                - raw (dict): optional, may contain 'layer_name' or 'layer' to prefer a specific layer inside a GeoPackage or ZIP.
-
-    Returns:
-        None
-    """
-    downloads = Path(cfg['workspaces']['downloads'])
-    for s in cfg.get('sources', []):
-        if not s.get('include', True):
-            continue
-        if s.get('type') not in ('file', 'http'):
-            continue
 def _extract_hints(source: dict) -> tuple[str | None, str | None]:
     """Extract and normalize include and layer hints from source configuration."""
     include_hint = source.get('include')
@@ -187,21 +157,33 @@ def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: 
             # Handle preferred hint for shapefiles
             if preferred_hint and (matched := [n for n in shp_files if preferred_hint.lower() in n.lower()]):
                 zf.extractall(target_dir)
-                shp_full = next(target_dir.glob(f"**/*{Path(matched[0]).name}"))
-                return _import_shapefile(shp_full, cfg, source['out_name'])
+                shp_full = next(target_dir.glob(f"**/*{Path(matched[0]).name}"), None)
+                if shp_full:
+                    return _import_shapefile(shp_full, cfg, source['out_name'])
+                else:
+                    logging.error(f"[STAGE] Expected shapefile not found after extraction: {matched[0]}")
+                    return False
 
             # Handle single shapefile
             if len(shp_files) == 1 and not gpkg_files:
                 zf.extractall(target_dir)
-                shp_full = next(target_dir.glob('**/*.shp'))
-                return _import_shapefile(shp_full, cfg, source['out_name'])
+                shp_full = next(target_dir.glob('**/*.shp'), None)
+                if shp_full:
+                    return _import_shapefile(shp_full, cfg, source['out_name'])
+                else:
+                    logging.error("[STAGE] Expected shapefile not found after extraction")
+                    return False
 
             # Handle GPKG files
             if len(gpkg_files) >= 1:
                 zf.extractall(target_dir)
-                gpkg_full = next(target_dir.glob('**/*.gpkg'))
-                layer_name = preferred_hint if preferred_hint else None
-                return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
+                gpkg_full = next(target_dir.glob('**/*.gpkg'), None)
+                if gpkg_full:
+                    layer_name = preferred_hint if preferred_hint else None
+                    return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
+                else:
+                    logging.error("[STAGE] Expected GPKG file not found after extraction")
+                    return False
 
             logging.warning(f"[STAGE] Zip contains multiple or no shapefiles/gpkg; skipping {file_path}")
             return False
@@ -229,6 +211,24 @@ def _process_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str 
 def ingest_downloads(cfg: dict) -> None:
     downloads = Path(cfg['workspaces']['downloads'])
 
+    for source in cfg.get('sources', []):
+        if not source.get('include', True) or source.get('type') not in ('file', 'http'):
+            continue
+
+        auth_dir = downloads / (source.get('authority') or '')
+        if not auth_dir.exists():
+            logging.debug(f"[STAGE] No download dir for {source.get('name')} ({auth_dir})")
+            continue
+
+        stem = source.get('out_name') or ''
+        include_hint, layer_hint = _extract_hints(source)
+        preferred_hint = layer_hint or include_hint
+
+        if not (candidates := _find_candidates(auth_dir, stem)):
+            logging.info(f"[STAGE] No downloaded file found for source {source.get('name')} in {auth_dir}")
+            continue
+
+        _process_file(candidates[0], cfg, source, preferred_hint)
     for source in cfg.get('sources', []):
         if not source.get('include', True) or source.get('type') not in ('file', 'http'):
             continue

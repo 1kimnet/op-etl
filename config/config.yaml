@@ -137,7 +137,7 @@ global_ogc_bbox:
 ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
 
 # SDE loading settings
-sde_connection_file: "data/connections/prod.sde"
+sde_connection_file: ".data/connections/prod.sde"  # Updated to match new workspace structure
 sde_schema: "GNG"  # Schema prefix for datasets
 sde_dataset_pattern: "Underlag_{authority}"  # Pattern for dataset names
 sde_load_strategy: "truncate_and_load"  # Options: "truncate_and_load", "replace", "append"
