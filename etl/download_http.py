@@ -10,7 +10,6 @@ Dependencies: PyYAML, requests (bundled with ArcGIS Pro), stdlib
 """
 
 import argparse
-import importlib
 import logging
 import re
 import sys
@@ -138,22 +137,22 @@ def ensure_dir(p: Path):
 def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
     """
     Download a URL to a file inside out_dir and return the final local Path.
-    
+
     Detailed behavior:
     - Builds a destination filename using a slugified file_hint plus the base name (and recognized extension) from the URL.
     - If the destination exists, appends a timestamp to avoid collision.
     - Streams the response to a temporary ".part" file and atomically moves it into place.
     - Retries up to 3 times with exponential backoff on transient failures.
     - Validates that the final file exists and is non-empty before returning.
-    
+
     Parameters:
         url (str): The remote resource URL to download.
         out_dir (Path): Directory where the downloaded file will be written (created if missing).
         file_hint (str): A short identifier used (after slugification) as the prefix for the saved filename.
-    
+
     Returns:
         Path: The path to the successfully downloaded file.
-    
+
     Raises:
         RuntimeError: If the requests library is unavailable, if an HTTP client is not usable, or if the download fails after retries or yields an empty/missing file.
     """
@@ -234,7 +233,7 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
 def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
     """
     Return the extraction directory if `path` is a ZIP archive, otherwise None.
-    
+
     If `path` has a ".zip" suffix (case-insensitive), extracts its contents into
     `extract_root/<slug(path.stem)>`, creating that directory if needed, and returns
     the Path to the created directory. For non-ZIP paths returns `None`.
@@ -255,25 +254,25 @@ def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
 def run(cfg: dict) -> None:
     """
     Run the download stage of the OP-ETL pipeline using the provided configuration.
-    
+
     This function reads source definitions from cfg["sources"] and a downloads workspace path from
     cfg["workspaces"]["downloads"], normalizes each source, and for sources of type "http" or "file"
     downloads the referenced URL into downloads/<authority>/..., optionally extracting ZIP archives.
     Sources with types "rest", "ogc", "atom", and "atom_feed" are recognized but only recorded as
     TODO (no network interactions are performed for them here). Per-source errors are caught and
     logged; successful operations are logged with elapsed time and the resulting path or status.
-    
+
     Expected cfg structure (minimal):
     {
       "workspaces": { "downloads": "<path-to-downloads-root>" },
       "sources": [ ... ]  # list of source dicts (see load_sources_yaml for canonical fields)
     }
-    
+
     Side effects:
     - Creates directories under the configured downloads workspace.
     - Writes downloaded files and extracted archive contents to disk.
     - Emits INFO/ERROR logs for each source.
-    
+
     Returns:
     - None
     """
@@ -383,32 +382,10 @@ def main():
     )
 
 
-# Create a requests session with retries and user-agent (guarded and linter-friendly)
+# Simple HTTP client references (avoid adapter-based retries that may recurse on some stacks)
 session = None
-requests_get = None
+requests_get = getattr(requests, "get", None) if requests is not None else None
 HEADERS = {"User-Agent": "op-etl/0.1 (+contact@example.org)"}
-
-if requests is not None:
-    try:
-        # import adapters module separately to avoid attribute access on a possibly-None 'requests'
-        adapters = importlib.import_module("requests.adapters")
-        HTTPAdapter = getattr(adapters, "HTTPAdapter")
-
-        # create a session and mount adapters
-        session = requests.Session()
-        adapter = HTTPAdapter(max_retries=3)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-
-        # keep a direct reference to the module-level get for the fallback
-        requests_get = getattr(requests, "get", None)
-    except Exception:
-        # best-effort: leave session/request_get as None and fall back to raising meaningful errors later
-        session = None
-        requests_get = None
-else:
-    session = None
-    requests_get = None
 
 
 def query_all(fl, where="1=1", geom=None, out_sr=None, page_size=2000):
