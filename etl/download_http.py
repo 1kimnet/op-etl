@@ -205,6 +205,7 @@ def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
     """
     Return the extraction directory if `path` is a ZIP archive, otherwise None.
 
+
     If `path` has a ".zip" suffix (case-insensitive), extracts its contents into
     `extract_root/<slug(path.stem)>`, creating that directory if needed, and returns
     the Path to the created directory. For non-ZIP paths returns `None`.
@@ -226,6 +227,7 @@ def run(cfg: dict) -> None:
     """
     Run the download stage of the OP-ETL pipeline using the provided configuration.
 
+
     This function reads source definitions from cfg["sources"] and a downloads workspace path from
     cfg["workspaces"]["downloads"], normalizes each source, and for sources of type "http" or "file"
     downloads the referenced URL into downloads/<authority>/..., optionally extracting ZIP archives.
@@ -233,16 +235,19 @@ def run(cfg: dict) -> None:
     TODO (no network interactions are performed for them here). Per-source errors are caught and
     logged; successful operations are logged with elapsed time and the resulting path or status.
 
+
     Expected cfg structure (minimal):
     {
       "workspaces": { "downloads": "<path-to-downloads-root>" },
       "sources": [ ... ]  # list of source dicts (see load_sources_yaml for canonical fields)
     }
 
+
     Side effects:
     - Creates directories under the configured downloads workspace.
     - Writes downloaded files and extracted archive contents to disk.
     - Emits INFO/ERROR logs for each source.
+
 
     Returns:
     - None
