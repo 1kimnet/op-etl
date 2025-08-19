@@ -31,7 +31,12 @@ def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
         except Exception:
             # best-effort delete; continue to attempt import
             logging.debug(f"[STAGE] Could not delete existing {out_fc} before import")
-        arcpy.conversion.FeatureClassToFeatureClass(str(shp_path), out_fc.rsplit('/', 1)[0], out_fc.rsplit('/', 1)[1])
+        out_fc_path = Path(out_fc)
+        arcpy.conversion.FeatureClassToFeatureClass(
+            str(shp_path),
+            str(out_fc_path.parent),
+            out_fc_path.name
+        )
         logging.info(f"[STAGE] Imported shapefile {shp_path} -> {out_fc}")
         return True
     except Exception as e:
