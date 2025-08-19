@@ -9,6 +9,10 @@ def run(cfg):
             continue
         src = f'{cfg["workspaces"]["staging_gdb"]}/{s["out_name"]}'
         dest = f'{sde}/{s["out_name"]}'   # keep same name for now
+        # If the source in the staging GDB doesn't exist, skip gracefully.
+        if not arcpy.Exists(src):
+            logging.warning(f"[LOAD] Source missing in staging, skipping: {src}")
+            continue
         if not arcpy.Exists(dest):
             # first time: create empty dest by copying schema
             arcpy.management.CreateFeatureclass(sde, s["out_name"], geometry_type=arcpy.Describe(src).shapeType, template=src, spatial_reference=arcpy.Describe(src).spatialReference)

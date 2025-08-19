@@ -1,9 +1,9 @@
 # ETL Pipeline Global Configuration
 # This is the main configuration file for the ETL pipeline
 workspaces:
-  downloads: ./downloads
-  staging_gdb: ./staging.gdb
-  sde_conn: C:/path/to/your.sde
+  downloads: .data/downloads
+  staging_gdb: .data/staging/staging.gdb
+  sde_conn: .data/connections/prod.sde
 # geoprocess:
 #   enabled: false
 # Environment settings (can be overridden by ETL_ENVIRONMENT variable)
@@ -36,11 +36,11 @@ retry:
 
 # File paths configuration
 paths:
-  download: "downloads"
-  staging: "staging"
-  output: "output"
-  temp: "temp"
-  logs: "logs"
+  download: ".data/downloads"
+  staging: ".data/ staging"
+  output: ".data/output"
+  temp: ".data/temp"
+  logs: ".logs"
 
 # Data processing configuration
 processing:

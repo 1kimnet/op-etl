@@ -43,6 +43,9 @@ def main():
         from etl import download_http, download_rest
         download_http.run(cfg)
         download_rest.run(cfg)
+        # Ingest downloaded file-based sources into staging.gdb
+        from etl import stage_files
+        stage_files.ingest_downloads(cfg)
         logging.info("Download process finished.")
 
     if args.process or do_all:
