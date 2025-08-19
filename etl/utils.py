@@ -9,10 +9,20 @@ from typing import List, Optional
 
 
 def best_shapefile_by_count(paths: List[Path]) -> Optional[Path]:
-    """Return the Path with the highest feature count (>0) or None.
-
-    Imports ``arcpy`` inside the function so this module can be imported
-    in non-ArcPy environments for static analysis.
+    """
+    Select the Path whose dataset has the largest feature count (must be > 0), or return None.
+    
+    Parameters:
+        paths (List[Path]): Iterable of filesystem Paths pointing to candidate feature datasets
+            (e.g., shapefiles). Each path will be counted using ArcPy's GetCount.
+    
+    Returns:
+        Optional[Path]: The Path with the highest feature count when that count is greater than zero;
+        otherwise None.
+    
+    Notes:
+        - ArcPy is imported inside the function; if ArcPy cannot be imported the function returns None.
+        - Individual GetCount failures for a path are treated as a non-candidate (count <= 0).
     """
     try:
         import arcpy
@@ -40,10 +50,16 @@ def best_shapefile_by_count(paths: List[Path]) -> Optional[Path]:
 
 
 def best_layer_in_gpkg(gpkg_path: Path) -> Optional[str]:
-    """Return the layer name inside a GPKG with the highest feature count, or None.
-
-    Uses ArcPy to list feature classes inside the geopackage and selects the
-    layer with the largest feature count.
+    """
+    Return the name of the feature layer inside a GeoPackage that has the largest feature count, or None.
+    
+    Attempts to import ArcPy and uses arcpy.da.Walk to enumerate feature classes inside the given GeoPackage path, then calls arcpy.management.GetCount for each candidate to determine feature counts. If ArcPy cannot be imported, if enumeration fails, or if no feature class has a count > 0, the function returns None. On tie, the first encountered layer with the highest count is returned.
+    
+    Parameters:
+        gpkg_path (Path): Path to the .gpkg file to inspect.
+    
+    Returns:
+        Optional[str]: The feature class (layer) name with the greatest feature count, or None if unavailable.
     """
     try:
         import arcpy
@@ -79,6 +95,17 @@ def best_layer_in_gpkg(gpkg_path: Path) -> Optional[str]:
 
 
 def get_logger() -> logging.Logger:
+    """
+    Get a configured logger named "op-etl".
+    
+    Returns a logger instance named "op-etl". If the logger already has handlers it is returned unchanged; otherwise the function:
+    - sets the level to INFO,
+    - attaches a StreamHandler writing to stdout and a FileHandler writing to "op-etl.log" (UTF-8),
+    - applies a formatter that includes timestamp, level, and message.
+    
+    Side effects:
+    - May create or open the file "op-etl.log" in the current working directory.
+    """
     log = logging.getLogger("op-etl")
     if log.handlers:
         return log
@@ -94,6 +121,19 @@ def get_logger() -> logging.Logger:
 
 
 def log_http_request(log: logging.Logger, session, method: str, url: str, **kwargs):
+    """
+    Send an HTTP request via the provided session while logging the start and completion.
+    
+    Parameters:
+        method (str): HTTP method (e.g., 'GET', 'POST').
+        url (str): Request URL.
+    
+    Returns:
+        The response object returned by session.request (type depends on the session implementation).
+    
+    Notes:
+        Logs an INFO-level "start" entry before calling session.request and an INFO-level "done" entry after completion.
+    """
     log.info("[HTTP] start method=%s url=%s", method, url)
     response = session.request(method, url, **kwargs)
     log.info("[HTTP] done  method=%s status=%d url=%s", method, response.status_code, url)

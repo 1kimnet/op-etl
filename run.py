@@ -5,6 +5,24 @@ from etl.paths import ensure_workspaces
 
 
 def main():
+    """
+    Run the ETL orchestration: configure logging, load configuration, prepare workspaces, and execute selected pipeline stages.
+    
+    This function:
+    - Configures logging to both logs/etl.log and the console.
+    - Parses command-line arguments to select which stages to run:
+      --download, --process, --load_sde (if none specified, all stages run).
+      Also accepts --config and --sources (paths to YAML files), optional --authority and --type filters, and a --plan flag (parsed but not acted on here).
+    - Loads configuration via load_config; on configuration failure it raises SystemExit with an error message.
+    - Ensures required workspaces via ensure_workspaces(cfg).
+    - Conditionally runs pipeline stages. Each stage is lazily imported and invoked:
+      - Download: runs download_http.run and download_rest.run, then ingests file-based downloads via stage_files.ingest_downloads.
+      - Processing: runs process.run.
+      - SDE loading: runs load_sde.run.
+    
+    Raises:
+        SystemExit: if loading configuration fails (ConfigError).
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",

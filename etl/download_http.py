@@ -136,6 +136,27 @@ def ensure_dir(p: Path):
     return p
 
 def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
+    """
+    Download a URL to a file inside out_dir and return the final local Path.
+    
+    Detailed behavior:
+    - Builds a destination filename using a slugified file_hint plus the base name (and recognized extension) from the URL.
+    - If the destination exists, appends a timestamp to avoid collision.
+    - Streams the response to a temporary ".part" file and atomically moves it into place.
+    - Retries up to 3 times with exponential backoff on transient failures.
+    - Validates that the final file exists and is non-empty before returning.
+    
+    Parameters:
+        url (str): The remote resource URL to download.
+        out_dir (Path): Directory where the downloaded file will be written (created if missing).
+        file_hint (str): A short identifier used (after slugification) as the prefix for the saved filename.
+    
+    Returns:
+        Path: The path to the successfully downloaded file.
+    
+    Raises:
+        RuntimeError: If the requests library is unavailable, if an HTTP client is not usable, or if the download fails after retries or yields an empty/missing file.
+    """
     if not requests:
         raise RuntimeError("requests not available in this Python environment.")
     ensure_dir(out_dir)
@@ -212,8 +233,11 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
 
 def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
     """
-    If path is a ZIP, extract into extract_root/<path_stem> and return that folder.
-    Otherwise return None.
+    Return the extraction directory if `path` is a ZIP archive, otherwise None.
+    
+    If `path` has a ".zip" suffix (case-insensitive), extracts its contents into
+    `extract_root/<slug(path.stem)>`, creating that directory if needed, and returns
+    the Path to the created directory. For non-ZIP paths returns `None`.
     """
     if path.suffix.lower() != ".zip":
         return None
@@ -229,7 +253,30 @@ def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
 
 # ---------- runner ----------
 def run(cfg: dict) -> None:
-    """Unified entrypoint that reads from merged cfg."""
+    """
+    Run the download stage of the OP-ETL pipeline using the provided configuration.
+    
+    This function reads source definitions from cfg["sources"] and a downloads workspace path from
+    cfg["workspaces"]["downloads"], normalizes each source, and for sources of type "http" or "file"
+    downloads the referenced URL into downloads/<authority>/..., optionally extracting ZIP archives.
+    Sources with types "rest", "ogc", "atom", and "atom_feed" are recognized but only recorded as
+    TODO (no network interactions are performed for them here). Per-source errors are caught and
+    logged; successful operations are logged with elapsed time and the resulting path or status.
+    
+    Expected cfg structure (minimal):
+    {
+      "workspaces": { "downloads": "<path-to-downloads-root>" },
+      "sources": [ ... ]  # list of source dicts (see load_sources_yaml for canonical fields)
+    }
+    
+    Side effects:
+    - Creates directories under the configured downloads workspace.
+    - Writes downloaded files and extracted archive contents to disk.
+    - Emits INFO/ERROR logs for each source.
+    
+    Returns:
+    - None
+    """
     raw_sources = cfg.get("sources", [])
     downloads_dir = Path(cfg["workspaces"]["downloads"])
     ensure_dir(downloads_dir)
