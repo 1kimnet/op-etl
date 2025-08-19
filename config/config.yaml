@@ -37,7 +37,7 @@ retry:
 # File paths configuration
 paths:
   download: ".data/downloads"
-  staging: ".data/ staging"
+  staging: ".data/staging"
   output: ".data/output"
   temp: ".data/temp"
   logs: ".logs"
