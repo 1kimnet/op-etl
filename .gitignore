@@ -44,7 +44,7 @@ _downloads/
 *.manifest
 *.spec
 data/
-
+.data/
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
