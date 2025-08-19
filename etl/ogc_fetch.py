@@ -37,7 +37,7 @@ def fetch_to_folder(
     *,
     collections: Iterable[str],
     page_size: int = 1000,
-    bbox: Sequence[float] | None = None,
+    bbox: Optional[Sequence[float]] = None,
     bbox_sr: int = 3006,
     supports_bbox_crs: bool = False,
     timeout: tuple[int, int] = (10, 180),
