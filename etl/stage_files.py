@@ -283,7 +283,9 @@ def _list_gpkg_layers(gpkg_path: Path) -> list[str]:
         layers: list[str] = []
         for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
             for f in filenames:
-                layers.append(f)
+                # Strip "main." prefix that some GPKG files have
+                layer_name = f.replace("main.", "") if f.startswith("main.") else f
+                layers.append(layer_name)
         return layers
     except Exception:
         return []
@@ -295,7 +297,9 @@ def _best_gpkg_layer(gpkg_path: Path) -> str | None:
         best_count = -1
         for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
             for f in filenames:
-                full = f"{str(gpkg_path)}|layername={f}"
+                # Strip "main." prefix for the layer name used in the path
+                layer_name = f.replace("main.", "") if f.startswith("main.") else f
+                full = f"{str(gpkg_path)}|layername={layer_name}"
                 try:
                     res = arcpy.management.GetCount(full)
                     cnt = int(str(res.getOutput(0)))
@@ -303,7 +307,7 @@ def _best_gpkg_layer(gpkg_path: Path) -> str | None:
                     cnt = -1
                 if cnt > best_count:
                     best_count = cnt
-                    best_layer = f
+                    best_layer = layer_name
         return best_layer if best_count > 0 else None
     except Exception:
         return None

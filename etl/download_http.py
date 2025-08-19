@@ -145,20 +145,31 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
     """
     ensure_dir(out_dir)
 
-    # Derive filename from URL if absent
-    base_from_url = slug(Path(url.split("?")[0]).name) or "download"
-    # Try to keep original extension (zip, gdb.zip, geojson, etc.)
-    ext = Path(url.split("?")[0]).suffix
-    if ext.lower() not in (".zip", ".json", ".geojson", ".gdb", ".gpkg", ".csv", ".txt", ".gz"):
-        ext = ""  # unknown, fine
+    # Create a cleaner filename from the URL
+    url_path = Path(url.split("?")[0])
+    original_name = url_path.name or "download"
 
-    fname = f"{slug(file_hint)}__{base_from_url}{ext}"
+    # Keep original extension
+    ext = url_path.suffix
+    if not ext or ext.lower() not in (".zip", ".json", ".geojson", ".gdb", ".gpkg", ".csv", ".txt", ".gz"):
+        ext = ""
+
+    # Use original filename if it's reasonable, otherwise use hint
+    if len(original_name) <= 50 and original_name != "download":
+        fname = original_name
+    else:
+        # Use a simplified name: just the file hint + extension
+        base_name = slug(file_hint, maxlen=40)
+        fname = f"{base_name}{ext}"
+
     dst = out_dir / fname
 
-    # Add timestamp if file exists
+    # Add timestamp if file exists to avoid conflicts
     if dst.exists():
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dst = out_dir / f"{dst.stem}_{ts}{dst.suffix}"
+        name_without_ext = dst.stem
+        fname = f"{name_without_ext}_{ts}{dst.suffix}"
+        dst = out_dir / fname
 
     # Iterative retry loop with exponential backoff and atomic write
     tries = 3
@@ -254,6 +265,14 @@ def run(cfg: dict) -> None:
     """
     raw_sources = cfg.get("sources", [])
     downloads_dir = Path(cfg["workspaces"]["downloads"])
+
+    # Clean download folder if configured to do so
+    cleanup_downloads = cfg.get("cleanup_downloads_before_run", False)
+    if cleanup_downloads and downloads_dir.exists():
+        import shutil
+        logging.info(f"Cleaning download directory: {downloads_dir}")
+        shutil.rmtree(downloads_dir)
+
     ensure_dir(downloads_dir)
 
     # Normalize sources to match the expected format from load_sources_yaml
@@ -285,9 +304,13 @@ def run(cfg: dict) -> None:
         # Authority: explicit or inferred from name prefix up to first underscore
         authority = slug(str(src.get("authority") or name.split("_", 1)[0]))
 
-        # Anything else we keep for later stages
+        # Anything else we keep for later stages - but preserve include patterns
         extra = {k: v for k, v in src.items()
-                 if k not in {"name", "id", "type", "href", "url", "include", "enabled", "authority"}}
+                 if k not in {"name", "id", "type", "href", "url", "enabled", "authority"}}
+
+        # Keep include patterns from the original source for multi-file downloads
+        if "include" in src and isinstance(src["include"], list):
+            extra["include"] = src["include"]
 
         normalized_sources.append({
             "name": name,
@@ -303,7 +326,9 @@ def run(cfg: dict) -> None:
     srcs = [s for s in normalized_sources if s.get("type") in {"http", "file", "atom_feed", "atom"}]
 
     for s in srcs:
-        if not s["include"]:
+        # Check if source is enabled (either include=true or include has patterns)
+        source_enabled = s["include"] or (s.get("extra", {}).get("include") and isinstance(s.get("extra", {}).get("include"), list))
+        if not source_enabled:
             logging.info(f"Skipping {s['name']} (include=false)")
             continue
 
@@ -312,10 +337,33 @@ def run(cfg: dict) -> None:
             auth_dir = ensure_dir(downloads_dir / s["authority"])
             # Treat local file downloads and plain HTTP the same: fetch the URL to downloads
             if s["type"] in ("http", "file"):
-                file_path = http_download(s["url"], auth_dir, s["name"])
-                extracted = maybe_unzip(file_path, auth_dir)
-                msg_path = str(extracted or file_path)
-                status = "OK"
+                # Check if this source has include patterns (multiple files to download)
+                include_patterns = s.get("extra", {}).get("include", [])
+                if include_patterns and isinstance(include_patterns, list):
+                    # Download multiple files based on include patterns
+                    base_url = s["url"].rstrip("/")
+                    downloaded_files = []
+                    for pattern in include_patterns:
+                        pattern_url = f"{base_url}/{pattern}.zip"
+                        try:
+                            file_path = http_download(pattern_url, auth_dir, f"{s['name']}_{pattern}")
+                            extracted = maybe_unzip(file_path, auth_dir)
+                            downloaded_files.append(str(extracted or file_path))
+                        except Exception as e:
+                            logging.warning(f"Failed to download {pattern_url}: {e}")
+
+                    if downloaded_files:
+                        msg_path = f"Downloaded {len(downloaded_files)} files: {', '.join(downloaded_files[:3])}{'...' if len(downloaded_files) > 3 else ''}"
+                        status = "OK"
+                    else:
+                        msg_path = "No files downloaded successfully"
+                        status = "FAIL"
+                else:
+                    # Single file download
+                    file_path = http_download(s["url"], auth_dir, s["name"])
+                    extracted = maybe_unzip(file_path, auth_dir)
+                    msg_path = str(extracted or file_path)
+                    status = "OK"
             elif s["type"] in ("rest", "ogc", "atom", "atom_feed"):
                 # Placeholders for later steps; for now we just record intention.
                 msg_path = f"planned handler not implemented yet for type={s['type']}"
