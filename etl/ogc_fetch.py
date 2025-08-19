@@ -19,7 +19,7 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def _next_link(links: Sequence[dict] | None) -> Optional[str]:
+def _next_link(links: Optional[Sequence[dict]]) -> Optional[str]:
     """Return the ``href`` of the link with ``rel='next'`` if present."""
     if not links:
         return None
