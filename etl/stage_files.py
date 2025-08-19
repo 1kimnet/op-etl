@@ -99,9 +99,24 @@ def ingest_downloads(cfg: dict) -> None:
         # Choose preferred hint: layer_hint first, then include_hint
         preferred_hint = layer_hint or include_hint
         candidates = []
-        # look for common extensions
-        for ext in ('*.zip', '*.gpkg', '*.shp'):
-            f = _find_latest_file(auth_dir, f"{stem}{ext}") or _find_latest_file(auth_dir, ext)
+        # look for common extensions (case-insensitive)
+        def _find_latest_file_case_insensitive(directory, pattern_stem, extensions):
+            files = []
+            for p in directory.iterdir():
+                if p.is_file():
+                    ext_lc = p.suffix.lower()
+                    name_lc = p.stem.lower()
+                    for ext in extensions:
+                        if ext_lc == ext and (not pattern_stem or name_lc == pattern_stem.lower()):
+                            files.append(p)
+            if files:
+                # Sort by modification time, newest first
+                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                return files[0]
+            return None
+
+        for ext in ('.zip', '.gpkg', '.shp'):
+            f = _find_latest_file_case_insensitive(auth_dir, stem, [ext]) or _find_latest_file_case_insensitive(auth_dir, None, [ext])
             if f:
                 candidates.append(f)
 
