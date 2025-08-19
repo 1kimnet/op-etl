@@ -60,9 +60,14 @@ def fetch_to_folder(
         url = items_url
         current = params
         while url:
-            response = requests.get(url, params=current, timeout=timeout)
-            response.raise_for_status()
-            js = response.json()
+            try:
+                response = requests.get(url, params=current, timeout=timeout)
+                response.raise_for_status()
+                js = response.json()
+            except requests.RequestException as e:
+                print(f"Failed to fetch {url}: {e}")
+                url = None
+                continue
             features = js.get("features") or []
             if not features:
                 break
