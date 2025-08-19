@@ -44,30 +44,14 @@ def load_config(
     # Process sources to ensure they have required fields
     processed_sources = []
     for i, source in enumerate(sources):
-        if not isinstance(source, dict):
-            continue
-
-        # Create a copy to avoid modifying the original
         processed_source = source.copy()
 
         # Generate out_name from name if not provided
         if "out_name" not in processed_source:
             name = processed_source.get("name", f"source_{i}")
-            # Sanitize name for use as feature class name (similar to slug function in download_http.py)
-            import re
-            char_map = str.maketrans({
-                "å": "a", "Å": "a", "ä": "a", "Ä": "a", "ö": "o", "Ö": "o",
-                "é": "e", "É": "e", "ü": "u", "Ü": "u", "ß": "ss",
-            })
-            safe_re = re.compile(r"[^a-z0-9_\-]+")
-            out_name = name.strip().lower().translate(char_map)
-            out_name = out_name.replace(" ", "_").replace("-", "_")
-            out_name = safe_re.sub("_", out_name)
-            out_name = re.sub(r"_+", "_", out_name).strip("_")
-            # Ensure it starts with a letter (ArcGIS requirement)
-            if out_name and not out_name[0].isalpha():
-                out_name = f"fc_{out_name}"
-            processed_source["out_name"] = out_name[:64] or f"source_{i}"  # Limit length for ArcGIS
+            # Use the same slug function as download_http.py
+            from .download_http import slug
+            processed_source["out_name"] = slug(name)
 
         processed_sources.append(processed_source)
 

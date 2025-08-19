@@ -38,11 +38,15 @@ flowchart LR
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/<your-org>/atlaspipe.git
-   cd atlaspipe
+   git clone https://github.com/1kimnet/op-etl.git
+   cd op-etl
+   2. Install dependencies:
+    ```bash
+   pip install -r requirements.txt
    ```
 
 2. Create or edit `config.yaml` to define:
+
    ```yaml
    workspaces:
      downloads: ./_downloads

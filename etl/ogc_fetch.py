@@ -52,7 +52,7 @@ def fetch_to_folder(
     base = base_collections_url.rstrip("/") + "/"
     for coll in collections:
         items_url = urljoin(base, f"{coll}/items")
-        params = {"limit": page_size}
+        params: dict[str, str | int] = {"limit": page_size}
         if bbox:
             params["bbox"] = ",".join(str(v) for v in bbox)
             if supports_bbox_crs:
