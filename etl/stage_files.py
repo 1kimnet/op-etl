@@ -19,7 +19,7 @@ def _find_latest_file(download_dir: Path, pattern: str):
     # Find latest file matching a simple glob pattern (pattern can be '*' or name stem)
     """
     Return the most recently modified file in download_dir that matches the given glob pattern.
-    
+
     Pattern is a pathlib-style glob (e.g. '*.zip', 'mystem*.gpkg', or a literal filename) evaluated against download_dir. Returns the Path to the newest matching file, or None if no matches are found.
     """
     files = sorted(download_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -29,18 +29,18 @@ def _find_latest_file(download_dir: Path, pattern: str):
 def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
     """
     Import a .shp file into the staging geodatabase and overwrite any existing target.
-    
+
     Detailed description:
     - Computes the destination feature class using staging_path(cfg, out_name).
     - Attempts a best-effort delete of an existing target before importing.
     - Converts the input shapefile into a feature class at the staging destination using ArcPy.
     - Catches errors and returns a boolean status rather than raising.
-    
+
     Parameters:
         shp_path (Path): Path to the source .shp file.
         cfg (dict): Configuration mapping (used to resolve the staging path).
         out_name (str): Logical name for the output feature class in the staging geodatabase.
-    
+
     Returns:
         bool: True if the shapefile was imported successfully; False on failure.
     """
@@ -53,7 +53,12 @@ def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
         except Exception:
             # best-effort delete; continue to attempt import
             logging.debug(f"[STAGE] Could not delete existing {out_fc} before import")
-        arcpy.conversion.FeatureClassToFeatureClass(str(shp_path), out_fc.rsplit('/', 1)[0], out_fc.rsplit('/', 1)[1])
+        out_fc_path = Path(out_fc)
+        arcpy.conversion.FeatureClassToFeatureClass(
+            str(shp_path),
+            str(out_fc_path.parent),
+            out_fc_path.name
+        )
         logging.info(f"[STAGE] Imported shapefile {shp_path} -> {out_fc}")
         return True
     except Exception as e:
@@ -61,15 +66,15 @@ def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
         return False
 
 
-def _import_gpkg(gpkg_path: Path, cfg, out_name: str, layer_name: str | None = None) -> bool:
+def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | None = None) -> bool:
     """
     Import a GeoPackage into the staging dataset at the path derived from cfg and out_name.
-    
+
     Attempts to remove any existing target (best-effort) then copies either the whole GeoPackage (first layer) or a specific layer if layer_name is provided into staging_path(cfg, out_name).
-    
+
     Parameters:
         layer_name (str | None): Optional exact layer name inside the GeoPackage to import. If omitted, the GeoPackage path is used and the first layer is imported.
-    
+
     Returns:
         bool: True on successful import, False on any failure.
     """
@@ -86,7 +91,8 @@ def _import_gpkg(gpkg_path: Path, cfg, out_name: str, layer_name: str | None = N
         else:
             # ArcPy can reference gpkg with layer syntax if needed; try to copy first layer
             src = str(gpkg_path)
-        arcpy.conversion.FeatureClassToFeatureClass(src, out_fc.rsplit('/', 1)[0], out_fc.rsplit('/', 1)[1])
+        out_fc_path = Path(out_fc)
+        arcpy.conversion.FeatureClassToFeatureClass(src, str(out_fc_path.parent), out_fc_path.name)
         logging.info(f"[STAGE] Imported GPKG {gpkg_path} -> {out_fc}")
         return True
     except Exception as e:
@@ -97,13 +103,13 @@ def _import_gpkg(gpkg_path: Path, cfg, out_name: str, layer_name: str | None = N
 def ingest_downloads(cfg: dict) -> None:
     """
     Ingest downloaded file-based sources from the configured downloads workspace into the staging dataset.
-    
+
     Processes sources in cfg['sources'] that are included and of type 'file' or 'http'. For each source it:
     - Locates the latest matching downloaded file in downloads/<authority> by trying stem-based and generic patterns (*.zip, *.gpkg, *.shp).
     - Supports ZIP archives (prefers a hinted shapefile or single shapefile, or contained GeoPackage(s) with optional layer hints), GeoPackage (.gpkg) files (optionally importing a named layer), and single shapefiles (.shp).
     - Extracts ZIP contents to a sibling directory when needed and delegates ingestion to _import_shapefile or _import_gpkg.
     - Skips ambiguous archives or unsupported file types and continues on errors (errors are logged).
-    
+
     Parameters:
         cfg (dict): Configuration containing at least:
             - workspaces: a mapping with 'downloads' pointing to the downloads directory.
@@ -114,7 +120,7 @@ def ingest_downloads(cfg: dict) -> None:
                 - name (str): human-readable name used in logs.
                 - out_name (str): target staging feature name (passed to import helpers).
                 - raw (dict): optional, may contain 'layer_name' or 'layer' to prefer a specific layer inside a GeoPackage or ZIP.
-    
+
     Returns:
         None
     """
@@ -155,9 +161,24 @@ def ingest_downloads(cfg: dict) -> None:
         # Choose preferred hint: layer_hint first, then include_hint
         preferred_hint = layer_hint or include_hint
         candidates = []
-        # look for common extensions
-        for ext in ('*.zip', '*.gpkg', '*.shp'):
-            f = _find_latest_file(auth_dir, f"{stem}{ext}") or _find_latest_file(auth_dir, ext)
+        # look for common extensions (case-insensitive)
+        def _find_latest_file_case_insensitive(directory, pattern_stem, extensions):
+            files = []
+            for p in directory.iterdir():
+                if p.is_file():
+                    ext_lc = p.suffix.lower()
+                    name_lc = p.stem.lower()
+                    for ext in extensions:
+                        if ext_lc == ext and (not pattern_stem or name_lc == pattern_stem.lower()):
+                            files.append(p)
+            if files:
+                # Sort by modification time, newest first
+                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                return files[0]
+            return None
+
+        for ext in ('.zip', '.gpkg', '.shp'):
+            f = _find_latest_file_case_insensitive(auth_dir, stem, [ext]) or _find_latest_file_case_insensitive(auth_dir, None, [ext])
             if f:
                 candidates.append(f)
 
