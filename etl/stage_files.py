@@ -13,6 +13,7 @@ import zipfile
 import logging
 import arcpy
 from .paths import staging_path
+from .utils import best_shapefile_by_count
 
 
 def _find_latest_file(download_dir: Path, pattern: str):
@@ -89,8 +90,14 @@ def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | No
         if layer_name:
             src = f"{str(gpkg_path)}|layername={layer_name}"
         else:
-            # ArcPy can reference gpkg with layer syntax if needed; try to copy first layer
-            src = str(gpkg_path)
+            # List layers and pick the first one
+            layers = _list_gpkg_layers(gpkg_path)
+            if not layers:
+                logging.error(f"[STAGE] No layers found in GPKG {gpkg_path}")
+                return False
+            if len(layers) > 1:
+                logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", gpkg_path, ", ".join(layers))
+            src = f"{str(gpkg_path)}|layername={layers[0]}"
         out_fc_path = Path(out_fc)
         arcpy.conversion.FeatureClassToFeatureClass(src, str(out_fc_path.parent), out_fc_path.name)
         logging.info(f"[STAGE] Imported GPKG {gpkg_path} -> {out_fc}")
@@ -150,6 +157,7 @@ def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: 
             namelist = zf.namelist()
             shp_files = [n for n in namelist if n.lower().endswith('.shp')]
             gpkg_files = [n for n in namelist if n.lower().endswith('.gpkg')]
+            auto_select = bool((source.get('raw') or {}).get('auto_select'))
 
             target_dir = file_path.with_suffix('')
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -164,15 +172,24 @@ def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: 
                     logging.error(f"[STAGE] Expected shapefile not found after extraction: {matched[0]}")
                     return False
 
-            # Handle single shapefile
-            if len(shp_files) == 1 and not gpkg_files:
+            # Handle shapefiles in archive
+            if len(shp_files) >= 1 and not gpkg_files:
                 zf.extractall(target_dir)
-                shp_full = next(target_dir.glob('**/*.shp'), None)
-                if shp_full:
-                    return _import_shapefile(shp_full, cfg, source['out_name'])
-                else:
+                shp_paths = list(target_dir.glob('**/*.shp'))
+                if not shp_paths:
                     logging.error("[STAGE] Expected shapefile not found after extraction")
                     return False
+                if len(shp_paths) == 1 or not auto_select:
+                    if len(shp_paths) > 1:
+                        logging.info("[STAGE] Multiple shapefiles in %s; candidates: %s", file_path, ", ".join(str(p) for p in shp_paths))
+                    return _import_shapefile(shp_paths[0], cfg, source['out_name'])
+                # auto-select best shapefile by feature count
+                best = best_shapefile_by_count(shp_paths)
+                if best is None:
+                    logging.warning("[STAGE] auto_select could not pick shapefile (no counts>0); skipping %s", file_path)
+                    return False
+                logging.info("[STAGE] auto_select picked shapefile %s from %s", best, file_path)
+                return _import_shapefile(best, cfg, source['out_name'])
 
             # Handle GPKG files
             if len(gpkg_files) >= 1:
@@ -180,7 +197,22 @@ def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: 
                 gpkg_full = next(target_dir.glob('**/*.gpkg'), None)
                 if gpkg_full:
                     layer_name = preferred_hint if preferred_hint else None
-                    return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
+                    if layer_name:
+                        return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
+                    # No explicit layer provided
+                    if auto_select:
+                        # choose the gpkg layer with highest feature count
+                        layer = _best_gpkg_layer(gpkg_full)
+                        if not layer:
+                            logging.warning("[STAGE] auto_select could not pick gpkg layer in %s; skipping", gpkg_full)
+                            return False
+                        logging.info("[STAGE] auto_select picked gpkg layer '%s' in %s", layer, gpkg_full)
+                        return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer)
+                    # Try importing first layer; also log the available layers
+                    layers = _list_gpkg_layers(gpkg_full)
+                    if len(layers) > 1:
+                        logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", gpkg_full, ", ".join(layers))
+                    return _import_gpkg(gpkg_full, cfg, source['out_name'])
                 else:
                     logging.error("[STAGE] Expected GPKG file not found after extraction")
                     return False
@@ -196,10 +228,24 @@ def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: 
 def _process_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str | None) -> bool:
     """Process a single file based on its extension."""
     suffix = file_path.suffix.lower()
+    auto_select = bool((source.get('raw') or {}).get('auto_select'))
 
     if suffix == '.zip':
         return _process_zip_file(file_path, cfg, source, preferred_hint)
     elif suffix == '.gpkg':
+        # If explicit layer is provided, use it; otherwise apply auto_select if enabled
+        if preferred_hint:
+            return _import_gpkg(file_path, cfg, source['out_name'], layer_name=preferred_hint)
+        if auto_select:
+            layer = _best_gpkg_layer(file_path)
+            if not layer:
+                logging.warning("[STAGE] auto_select could not pick gpkg layer in %s; skipping", file_path)
+                return False
+            logging.info("[STAGE] auto_select picked gpkg layer '%s' in %s", layer, file_path)
+            return _import_gpkg(file_path, cfg, source['out_name'], layer_name=layer)
+        layers = _list_gpkg_layers(file_path)
+        if len(layers) > 1:
+            logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", file_path, ", ".join(layers))
         return _import_gpkg(file_path, cfg, source['out_name'])
     elif suffix == '.shp':
         return _import_shapefile(file_path, cfg, source['out_name'])
@@ -227,23 +273,37 @@ def ingest_downloads(cfg: dict) -> None:
         if not (candidates := _find_candidates(auth_dir, stem)):
             logging.info(f"[STAGE] No downloaded file found for source {source.get('name')} in {auth_dir}")
             continue
-
+        if len(candidates) > 1:
+            logging.info("[STAGE] Multiple candidate files for %s in %s: %s", source.get('name'), auth_dir, ", ".join(str(c) for c in candidates))
         _process_file(candidates[0], cfg, source, preferred_hint)
-    for source in cfg.get('sources', []):
-        if not source.get('include', True) or source.get('type') not in ('file', 'http'):
-            continue
 
-        auth_dir = downloads / (source.get('authority') or '')
-        if not auth_dir.exists():
-            logging.debug(f"[STAGE] No download dir for {source.get('name')} ({auth_dir})")
-            continue
+def _list_gpkg_layers(gpkg_path: Path) -> list[str]:
+    """List feature layers inside a GPKG using arcpy.da.Walk (no env mutation)."""
+    try:
+        layers: list[str] = []
+        for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
+            for f in filenames:
+                layers.append(f)
+        return layers
+    except Exception:
+        return []
 
-        stem = source.get('out_name') or ''
-        include_hint, layer_hint = _extract_hints(source)
-        preferred_hint = layer_hint or include_hint
-
-        if not (candidates := _find_candidates(auth_dir, stem)):
-            logging.info(f"[STAGE] No downloaded file found for source {source.get('name')} in {auth_dir}")
-            continue
-
-        _process_file(candidates[0], cfg, source, preferred_hint)
+def _best_gpkg_layer(gpkg_path: Path) -> str | None:
+    """Return the gpkg layer name with the highest feature count (>0), or None, using full paths."""
+    try:
+        best_layer = None
+        best_count = -1
+        for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
+            for f in filenames:
+                full = f"{str(gpkg_path)}|layername={f}"
+                try:
+                    res = arcpy.management.GetCount(full)
+                    cnt = int(str(res.getOutput(0)))
+                except Exception:
+                    cnt = -1
+                if cnt > best_count:
+                    best_count = cnt
+                    best_layer = f
+        return best_layer if best_count > 0 else None
+    except Exception:
+        return None
