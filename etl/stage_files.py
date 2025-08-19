@@ -21,7 +21,7 @@ def _find_latest_file(download_dir: Path, pattern: str):
     return files[0] if files else None
 
 
-def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
+def _import_shapefile(shp_path: Path, cfg: dict, out_name: str) -> bool:
     out_fc = staging_path(cfg, out_name)
     try:
         # Remove existing target if present (overwrite behavior)
@@ -67,120 +67,120 @@ def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | No
         return False
 
 
+def _extract_hints(source: dict) -> tuple[str | None, str | None]:
+    """Extract and normalize include and layer hints from source configuration."""
+    include_hint = source.get('include')
+    raw = source.get('raw') or {}
+    layer_hint = raw.get('layer_name') or raw.get('layer')
+
+    # normalize include_hint to a single string if possible
+    include_hint = include_hint[0] if isinstance(include_hint, list) and include_hint else include_hint
+    include_hint = include_hint.strip() if isinstance(include_hint, str) else None
+
+    # normalize layer_hint to a single string if possible
+    layer_hint = layer_hint[0] if isinstance(layer_hint, list) and layer_hint else layer_hint
+    layer_hint = layer_hint.strip() if isinstance(layer_hint, str) else None
+
+    return include_hint, layer_hint
+
+
+def _find_candidates(auth_dir: Path, stem: str) -> list[Path]:
+    """Find candidate files in the authority directory."""
+    candidates = []
+
+    def _find_latest_file_case_insensitive(directory, pattern_stem, extensions):
+        files = []
+        for p in directory.iterdir():
+            if p.is_file():
+                ext_lc = p.suffix.lower()
+                name_lc = p.stem.lower()
+                for ext in extensions:
+                    if ext_lc == ext and (not pattern_stem or name_lc == pattern_stem.lower()):
+                        files.append(p)
+        if files:
+            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            return files[0]
+        return None
+
+    for ext in ('.zip', '.gpkg', '.shp'):
+        if (f := _find_latest_file_case_insensitive(auth_dir, stem, [ext])) or \
+           (f := _find_latest_file_case_insensitive(auth_dir, None, [ext])):
+            candidates.append(f)
+
+    return candidates
+
+
+def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str | None) -> bool:
+    """Process a ZIP file and import its contents."""
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zf:
+            namelist = zf.namelist()
+            shp_files = [n for n in namelist if n.lower().endswith('.shp')]
+            gpkg_files = [n for n in namelist if n.lower().endswith('.gpkg')]
+
+            target_dir = file_path.with_suffix('')
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Handle preferred hint for shapefiles
+            if preferred_hint and (matched := [n for n in shp_files if preferred_hint.lower() in n.lower()]):
+                zf.extractall(target_dir)
+                shp_full = next(target_dir.glob(f"**/*{Path(matched[0]).name}"))
+                return _import_shapefile(shp_full, cfg, source['out_name'])
+
+            # Handle single shapefile
+            if len(shp_files) == 1 and not gpkg_files:
+                zf.extractall(target_dir)
+                shp_full = next(target_dir.glob('**/*.shp'))
+                return _import_shapefile(shp_full, cfg, source['out_name'])
+
+            # Handle GPKG files
+            if len(gpkg_files) >= 1:
+                zf.extractall(target_dir)
+                gpkg_full = next(target_dir.glob('**/*.gpkg'))
+                layer_name = preferred_hint if preferred_hint else None
+                return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
+
+            logging.warning(f"[STAGE] Zip contains multiple or no shapefiles/gpkg; skipping {file_path}")
+            return False
+
+    except Exception as e:
+        logging.error(f"[STAGE] Error extracting zip {file_path}: {e}")
+        return False
+
+
+def _process_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str | None) -> bool:
+    """Process a single file based on its extension."""
+    suffix = file_path.suffix.lower()
+
+    if suffix == '.zip':
+        return _process_zip_file(file_path, cfg, source, preferred_hint)
+    elif suffix == '.gpkg':
+        return _import_gpkg(file_path, cfg, source['out_name'])
+    elif suffix == '.shp':
+        return _import_shapefile(file_path, cfg, source['out_name'])
+    else:
+        logging.info(f"[STAGE] Unsupported downloaded file type for {file_path}; skipping")
+        return False
+
+
 def ingest_downloads(cfg: dict) -> None:
     downloads = Path(cfg['workspaces']['downloads'])
-    for s in cfg.get('sources', []):
-        if not s.get('include', True):
-            continue
-        if s.get('type') not in ('file', 'http'):
+
+    for source in cfg.get('sources', []):
+        if not source.get('include', True) or source.get('type') not in ('file', 'http'):
             continue
 
-        auth_dir = downloads / (s.get('authority') or '')
+        auth_dir = downloads / (source.get('authority') or '')
         if not auth_dir.exists():
-            logging.debug(f"[STAGE] No download dir for {s.get('name')} ({auth_dir})")
+            logging.debug(f"[STAGE] No download dir for {source.get('name')} ({auth_dir})")
             continue
 
-        # Simple matching: look for files with source out_name or any standard extension
-        stem = s.get('out_name') or ''
-        include_hint = s.get('include')
-        # Also support a raw.layer_name override (preferred)
-        raw = s.get('raw') or {}
-        layer_hint = raw.get('layer_name') or raw.get('layer')
-
-        # normalize include_hint to a single string if possible, fallback to layer_hint
-        if isinstance(include_hint, list) and include_hint:
-            include_hint = include_hint[0]
-        if isinstance(include_hint, str):
-            include_hint = include_hint.strip()
-        else:
-            include_hint = None
-
-        if isinstance(layer_hint, list) and layer_hint:
-            layer_hint = layer_hint[0]
-        if isinstance(layer_hint, str):
-            layer_hint = layer_hint.strip()
-        else:
-            layer_hint = None
-
-        # Choose preferred hint: layer_hint first, then include_hint
+        stem = source.get('out_name') or ''
+        include_hint, layer_hint = _extract_hints(source)
         preferred_hint = layer_hint or include_hint
-        candidates = []
-        # look for common extensions (case-insensitive)
-        def _find_latest_file_case_insensitive(directory, pattern_stem, extensions):
-            files = []
-            for p in directory.iterdir():
-                if p.is_file():
-                    ext_lc = p.suffix.lower()
-                    name_lc = p.stem.lower()
-                    for ext in extensions:
-                        if ext_lc == ext and (not pattern_stem or name_lc == pattern_stem.lower()):
-                            files.append(p)
-            if files:
-                # Sort by modification time, newest first
-                files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                return files[0]
-            return None
 
-        for ext in ('.zip', '.gpkg', '.shp'):
-            f = _find_latest_file_case_insensitive(auth_dir, stem, [ext]) or _find_latest_file_case_insensitive(auth_dir, None, [ext])
-            if f:
-                candidates.append(f)
-
-        if not candidates:
-            logging.info(f"[STAGE] No downloaded file found for source {s.get('name')} in {auth_dir}")
+        if not (candidates := _find_candidates(auth_dir, stem)):
+            logging.info(f"[STAGE] No downloaded file found for source {source.get('name')} in {auth_dir}")
             continue
 
-        file_path = candidates[0]
-        # handle zip
-        if file_path.suffix.lower() == '.zip':
-            try:
-                with zipfile.ZipFile(file_path, 'r') as zf:
-                    namelist = zf.namelist()
-                    shp_files = [n for n in namelist if n.lower().endswith('.shp')]
-                    gpkg_files = [n for n in namelist if n.lower().endswith('.gpkg')]
-                    # If include_hint points to a shapefile name, prefer that
-                    if preferred_hint:
-                        matched = [n for n in shp_files if preferred_hint.lower() in n.lower()]
-                        if matched:
-                            target_dir = file_path.with_suffix('')
-                            target_dir.mkdir(parents=True, exist_ok=True)
-                            zf.extractall(target_dir)
-                            shp_full = next(target_dir.glob(f"**/*{Path(matched[0]).name}"))
-                            _import_shapefile(shp_full, cfg, s['out_name'])
-                            continue
-
-                    if len(shp_files) == 1 and not gpkg_files:
-                        # extract the shapefile files (shp+shx+dbf etc.) to a temp dir
-                        target_dir = file_path.with_suffix('')
-                        target_dir.mkdir(parents=True, exist_ok=True)
-                        zf.extractall(target_dir)
-                        shp_full = next(target_dir.glob('**/*.shp'))
-                        _import_shapefile(shp_full, cfg, s['out_name'])
-                    elif len(gpkg_files) >= 1:
-                        # If include_hint names a gpkg layer (e.g. layername), extract and try to import that layer
-                        target_dir = file_path.with_suffix('')
-                        target_dir.mkdir(parents=True, exist_ok=True)
-                        zf.extractall(target_dir)
-                        gpkg_full = next(target_dir.glob('**/*.gpkg'))
-                        if layer_hint:
-                            _import_gpkg(gpkg_full, cfg, s['out_name'], layer_name=layer_hint)
-                        elif include_hint:
-                            _import_gpkg(gpkg_full, cfg, s['out_name'], layer_name=include_hint)
-                        else:
-                            _import_gpkg(gpkg_full, cfg, s['out_name'])
-                        continue
-                    else:
-                        logging.warning(f"[STAGE] Zip contains multiple or no shapefiles/gpkg; skipping {file_path}")
-            except Exception as e:
-                logging.error(f"[STAGE] Error extracting zip {file_path}: {e}")
-            continue
-
-        if file_path.suffix.lower() == '.gpkg':
-            _import_gpkg(file_path, cfg, s['out_name'])
-            continue
-
-        if file_path.suffix.lower() == '.shp':
-            _import_shapefile(file_path, cfg, s['out_name'])
-            continue
-
-        logging.info(f"[STAGE] Unsupported downloaded file type for {file_path}; skipping")
+        _process_file(candidates[0], cfg, source, preferred_hint)
