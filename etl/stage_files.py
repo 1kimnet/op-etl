@@ -44,7 +44,7 @@ def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
         return False
 
 
-def _import_gpkg(gpkg_path: Path, cfg, out_name: str, layer_name: str | None = None) -> bool:
+def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | None = None) -> bool:
     out_fc = staging_path(cfg, out_name)
     try:
         # Remove existing target if present (overwrite behavior)
