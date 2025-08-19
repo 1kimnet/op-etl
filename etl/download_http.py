@@ -16,6 +16,7 @@ import re
 import sys
 import time
 import zipfile
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -135,6 +136,27 @@ def ensure_dir(p: Path):
     return p
 
 def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
+    """
+    Download a URL to a file inside out_dir and return the final local Path.
+    
+    Detailed behavior:
+    - Builds a destination filename using a slugified file_hint plus the base name (and recognized extension) from the URL.
+    - If the destination exists, appends a timestamp to avoid collision.
+    - Streams the response to a temporary ".part" file and atomically moves it into place.
+    - Retries up to 3 times with exponential backoff on transient failures.
+    - Validates that the final file exists and is non-empty before returning.
+    
+    Parameters:
+        url (str): The remote resource URL to download.
+        out_dir (Path): Directory where the downloaded file will be written (created if missing).
+        file_hint (str): A short identifier used (after slugification) as the prefix for the saved filename.
+    
+    Returns:
+        Path: The path to the successfully downloaded file.
+    
+    Raises:
+        RuntimeError: If the requests library is unavailable, if an HTTP client is not usable, or if the download fails after retries or yields an empty/missing file.
+    """
     if not requests:
         raise RuntimeError("requests not available in this Python environment.")
     ensure_dir(out_dir)
@@ -154,39 +176,68 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = out_dir / f"{dst.stem}_{ts}{dst.suffix}"
 
-    # Simple retry loop
-    tries, last_err = 3, None
-    for _ in range(tries):
+    # Iterative retry loop with exponential backoff and atomic write
+    tries = 3
+    backoff = 2
+    last_err = None
+    tmp_dst = out_dir / f"{dst.name}.part"
+    for attempt in range(1, tries + 1):
         try:
             # Prefer session if available (with headers + timeout), else fallback to module-level get
             if session is not None:
-                with session.get(url, stream=True, timeout=(10, 120), headers=HEADERS) as r:
-                    r.raise_for_status()
-                    with open(dst, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if chunk:
-                                f.write(chunk)
+                resp = session.get(url, stream=True, timeout=(10, 120), headers=HEADERS)
             else:
                 if requests_get is None:
-                    # requests module unavailable or dynamic import failed
                     raise RuntimeError("HTTP client not available: 'requests' is missing or unusable")
-                # use the module-level get function we captured earlier
-                with requests_get(url, stream=True, timeout=(10, 120), headers=HEADERS) as r:
-                    r.raise_for_status()
-                    with open(dst, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 256):
-                            if chunk:
-                                f.write(chunk)
-            return dst
+                resp = requests_get(url, stream=True, timeout=(10, 120), headers=HEADERS)
+
+            # Raise HTTP errors early
+            resp.raise_for_status()
+
+            # Stream to a temporary file first
+            with open(tmp_dst, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        f.write(chunk)
+
+            # Atomically move into place
+            os.replace(str(tmp_dst), str(dst))
+
+            # Basic validation: file must be non-empty
+            if dst.exists() and dst.stat().st_size > 0:
+                return dst
+            else:
+                raise RuntimeError("Downloaded file is empty or missing after write")
+
+        except RecursionError as re:
+            # Defensive: wrap recursion errors to avoid confusing stack traces in logs
+            last_err = re
+            logging.error("RecursionError while downloading %s: %s", url, re)
+            break
         except Exception as e:
             last_err = e
-            time.sleep(2)
+            logging.warning("Download attempt %d/%d failed for %s: %s", attempt, tries, url, e)
+            # remove partial file if present
+            try:
+                if tmp_dst.exists():
+                    tmp_dst.unlink()
+            except Exception:
+                pass
+            if attempt < tries:
+                time.sleep(backoff)
+                backoff *= 2
+            else:
+                break
+
     raise RuntimeError(f"Download failed after retries: {url} :: {last_err}")
 
 def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
     """
-    If path is a ZIP, extract into extract_root/<path_stem> and return that folder.
-    Otherwise return None.
+    Return the extraction directory if `path` is a ZIP archive, otherwise None.
+    
+    If `path` has a ".zip" suffix (case-insensitive), extracts its contents into
+    `extract_root/<slug(path.stem)>`, creating that directory if needed, and returns
+    the Path to the created directory. For non-ZIP paths returns `None`.
     """
     if path.suffix.lower() != ".zip":
         return None
@@ -202,7 +253,30 @@ def maybe_unzip(path: Path, extract_root: Path) -> Path | None:
 
 # ---------- runner ----------
 def run(cfg: dict) -> None:
-    """Unified entrypoint that reads from merged cfg."""
+    """
+    Run the download stage of the OP-ETL pipeline using the provided configuration.
+    
+    This function reads source definitions from cfg["sources"] and a downloads workspace path from
+    cfg["workspaces"]["downloads"], normalizes each source, and for sources of type "http" or "file"
+    downloads the referenced URL into downloads/<authority>/..., optionally extracting ZIP archives.
+    Sources with types "rest", "ogc", "atom", and "atom_feed" are recognized but only recorded as
+    TODO (no network interactions are performed for them here). Per-source errors are caught and
+    logged; successful operations are logged with elapsed time and the resulting path or status.
+    
+    Expected cfg structure (minimal):
+    {
+      "workspaces": { "downloads": "<path-to-downloads-root>" },
+      "sources": [ ... ]  # list of source dicts (see load_sources_yaml for canonical fields)
+    }
+    
+    Side effects:
+    - Creates directories under the configured downloads workspace.
+    - Writes downloaded files and extracted archive contents to disk.
+    - Emits INFO/ERROR logs for each source.
+    
+    Returns:
+    - None
+    """
     raw_sources = cfg.get("sources", [])
     downloads_dir = Path(cfg["workspaces"]["downloads"])
     ensure_dir(downloads_dir)
@@ -261,12 +335,13 @@ def run(cfg: dict) -> None:
         t0 = time.time()
         try:
             auth_dir = ensure_dir(downloads_dir / s["authority"])
-            if s["type"] == "http":
+            # Treat local file downloads and plain HTTP the same: fetch the URL to downloads
+            if s["type"] in ("http", "file"):
                 file_path = http_download(s["url"], auth_dir, s["name"])
                 extracted = maybe_unzip(file_path, auth_dir)
                 msg_path = str(extracted or file_path)
                 status = "OK"
-            elif s["type"] in ("rest", "ogc", "atom"):
+            elif s["type"] in ("rest", "ogc", "atom", "atom_feed"):
                 # Placeholders for later steps; for now we just record intention.
                 msg_path = f"planned handler not implemented yet for type={s['type']}"
                 status = "TODO"
