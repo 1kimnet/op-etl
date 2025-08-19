@@ -53,7 +53,8 @@ def _import_gpkg(gpkg_path: Path, cfg, out_name: str, layer_name: str | None = N
         else:
             # ArcPy can reference gpkg with layer syntax if needed; try to copy first layer
             src = str(gpkg_path)
-        arcpy.conversion.FeatureClassToFeatureClass(src, out_fc.rsplit('/', 1)[0], out_fc.rsplit('/', 1)[1])
+        out_fc_path = Path(out_fc)
+        arcpy.conversion.FeatureClassToFeatureClass(src, str(out_fc_path.parent), out_fc_path.name)
         logging.info(f"[STAGE] Imported GPKG {gpkg_path} -> {out_fc}")
         return True
     except Exception as e:
