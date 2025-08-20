@@ -7,7 +7,7 @@ sources:
   authority: FM
   type: file
   url: https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
-  enabled: false
+  enabled: true
 
 #-----------------------------------------------------#
 #                NVV - Naturvårdsverket               #
@@ -17,7 +17,7 @@ sources:
   authority: NVV
   type: file
   url: https://geodata.naturvardsverket.se/nedladdning/naturvardsregistret/
-  enabled: false
+  enabled: true
   raw:
     layer_name:
     - Biosfarsomraden
@@ -63,12 +63,12 @@ sources:
   authority: LST
   type: file
   url: https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
-  enabled: false
+  enabled: true
 - name: Riksintressen
   authority: LST
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_4/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -77,7 +77,7 @@ sources:
   authority: LST
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_vindbruk_4/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 
@@ -89,21 +89,21 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Foreskrifter_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Fysisk planering
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Fysisk_planering_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Ett rikt odlingslandskap
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -116,7 +116,7 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Friluftsliv_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -129,21 +129,21 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_God_bebyggd_miljo_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Hav i balans
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Hav_i_balans_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Levande sjöar och vattendrag
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -164,7 +164,7 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_skogar_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -173,7 +173,7 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Klimat_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -186,7 +186,7 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Kulturmiljo_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -195,7 +195,7 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markavvattning_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -208,35 +208,35 @@ sources:
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markstabilitet_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Naturkartläggning
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Naturkartlaggning_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Skog och träd
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Skog_och_trad_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD GI Värdetrakter våtmark
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Myllrande_vatmarker_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: LstD Strandskydd
   authority: LSTD
   type: rest_api
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Strandskydd_EXT/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 
@@ -248,7 +248,7 @@ sources:
   authority: MSB
   type: file
   url: https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------------------#
 #                RAA - Riksantikvarieämbetet              #
@@ -258,7 +258,7 @@ sources:
   authority: RAA
   type: atom_feed
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_raa.RAA_RI_kulturmiljovard_MB3kap6.xml
-  enabled: true
+  enabled: false
 - name: RAA Byggnader Sverige
   authority: RAA
   type: file
@@ -300,7 +300,7 @@ sources:
   authority: SGI
   type: file
   url: https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------------------------#
 #                SGU - Sveriges geologiska undersökning         #
@@ -357,7 +357,7 @@ sources:
   authority: SJV
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04jbb/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -366,21 +366,21 @@ sources:
   authority: SJV
   type: rest_api
   url: https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Produktionsplatser för djurhållning
   authority: SJV
   type: rest_api
   url: http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Ängs- och betesmarksinventeringen
   authority: SJV
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04ovr/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -395,7 +395,7 @@ sources:
   authority: SKS
   type: file
   url: https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip
-  enabled: false
+  enabled: true
   download_format: zip
 - name: Ras och skred
   authority: SKS
@@ -406,63 +406,63 @@ sources:
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaBiotopskydd/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Utförda avverkningar
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaUtfordavverkning/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Naturvårdsavtal
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNaturvardsavtal/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Återvätningsavtal
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAtervatningavtal/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Nyckelbiotoper
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNyckelbiotop/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Sumpskogar
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSumpskog/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Avverkningsanmälda områden
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAvverkningsanmalan/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Gräns för skogsskyddsbestämmelser
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsskyddsbestammelser/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 - name: Nyckelbiotoper - storskogsbruket
   authority: SKS
   type: rest_api
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsbruknyckelbiotop/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
 
@@ -474,7 +474,7 @@ sources:
   authority: SVK
   type: file
   url: https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------#
 #                TRV - Trafikverket           #
@@ -484,7 +484,7 @@ sources:
   authority: TRV
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak01/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson
     layer_ids:
@@ -500,6 +500,6 @@ sources:
   authority: TRV
   type: rest_api
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer
-  enabled: false
+  enabled: true
   raw:
     format: geojson

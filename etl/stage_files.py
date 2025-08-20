@@ -1,325 +1,319 @@
 """
-Simple, conservative ingestion of downloaded file-based sources into staging.gdb.
-
-Supports:
-- ZIP archives containing a single shapefile (or a named shapefile via `include` in sources)
-- GPKG files (imports first matching layer or named layer)
-- Single shapefile (.shp)
-
-Design: small, explicit rules; ambiguous archives are logged and skipped.
+Simple, reliable staging system for OP-ETL.
+Replace etl/stage_files.py with this implementation.
 """
-from pathlib import Path
-import zipfile
 import logging
+import zipfile
+import shutil
+from pathlib import Path
 import arcpy
-from .paths import staging_path
-from .utils import best_shapefile_by_count
+import unicodedata
+import re
 
-
-def _find_latest_file(download_dir: Path, pattern: str):
-    # Find latest file matching a simple glob pattern (pattern can be '*' or name stem)
+def stage_all_downloads(cfg: dict) -> None:
     """
-    Return the most recently modified file in download_dir that matches the given glob pattern.
-
-    Pattern is a pathlib-style glob (e.g. '*.zip', 'mystem*.gpkg', or a literal filename) evaluated against download_dir. Returns the Path to the newest matching file, or None if no matches are found.
+    Main staging function - discovers and imports all downloaded files.
+    Call this instead of stage_files.ingest_downloads()
     """
-    files = sorted(download_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0] if files else None
+    downloads_dir = Path(cfg['workspaces']['downloads'])
+    gdb_path = cfg['workspaces']['staging_gdb']
 
+    logging.info(f"[STAGE] Starting staging from {downloads_dir}")
 
-def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
-    """
-    Import a .shp file into the staging geodatabase and overwrite any existing target.
+    # Ensure staging GDB exists
+    ensure_gdb_exists(gdb_path)
 
-    Detailed description:
-    - Computes the destination feature class using staging_path(cfg, out_name).
-    - Attempts a best-effort delete of an existing target before importing.
-    - Converts the input shapefile into a feature class at the staging destination using ArcPy.
-    - Catches errors and returns a boolean status rather than raising.
+    # Clear staging GDB if configured
+    if cfg.get('cleanup_staging_before_run', False):
+        clear_staging_gdb(gdb_path)
 
-    Parameters:
-        shp_path (Path): Path to the source .shp file.
-        cfg (dict): Configuration mapping (used to resolve the staging path).
-        out_name (str): Logical name for the output feature class in the staging geodatabase.
+    imported_count = 0
 
-    Returns:
-        bool: True if the shapefile was imported successfully; False on failure.
-    """
-    out_fc = staging_path(cfg, out_name)
-    try:
-        # Remove existing target if present (overwrite behavior)
-        try:
-            if arcpy.Exists(out_fc):
-                arcpy.management.Delete(out_fc)
-        except Exception:
-            # best-effort delete; continue to attempt import
-            logging.debug(f"[STAGE] Could not delete existing {out_fc} before import")
+    # Process each authority directory
+    for authority_dir in downloads_dir.iterdir():
+        if not authority_dir.is_dir():
+            continue
 
-        # Handle potential character encoding issues in shapefile path
-        try:
-            out_fc_path = Path(out_fc)
-            arcpy.conversion.FeatureClassToFeatureClass(
-                str(shp_path),
-                str(out_fc_path.parent),
-                out_fc_path.name
-            )
-            logging.info(f"[STAGE] Imported shapefile {shp_path} -> {out_fc}")
-            return True
-        except Exception as char_error:
-            if "invalid characters" in str(char_error).lower():
-                logging.warning(f"[STAGE] Shapefile path contains invalid characters, skipping: {shp_path}")
-                logging.warning(f"[STAGE] Character error: {char_error}")
-                return False
+        authority_name = authority_dir.name.lower()
+        logging.info(f"[STAGE] Processing {authority_name}")
+
+        # Find all importable files
+        files_found = discover_files(authority_dir)
+        logging.info(f"[STAGE] Found {len(files_found)} files in {authority_name}")
+
+        # Import each file
+        for file_path in files_found:
+            safe_name = create_safe_name(file_path, authority_name)
+            success = import_file_to_staging(file_path, gdb_path, safe_name)
+
+            if success:
+                imported_count += 1
+                logging.info(f"[STAGE] + {file_path.name} -> {safe_name}")
             else:
-                # Re-raise if it's not a character issue
-                raise char_error
+                logging.warning(f"[STAGE] ✗ Failed: {file_path.name}")
 
-    except Exception as e:
-        logging.error(f"[STAGE] Failed to import shapefile {shp_path}: {e}")
-        return False
+    logging.info(f"[STAGE] Completed: {imported_count} files imported to staging")
 
-
-def _import_gpkg(gpkg_path: Path, cfg: dict, out_name: str, layer_name: str | None = None) -> bool:
-    """
-    Import a GeoPackage into the staging dataset at the path derived from cfg and out_name.
-
-    Attempts to remove any existing target (best-effort) then copies either the whole GeoPackage (first layer) or a specific layer if layer_name is provided into staging_path(cfg, out_name).
-
-    Parameters:
-        layer_name (str | None): Optional exact layer name inside the GeoPackage to import. If omitted, the GeoPackage path is used and the first layer is imported.
-
-    Returns:
-        bool: True on successful import, False on any failure.
-    """
-    out_fc = staging_path(cfg, out_name)
-    try:
-        # Remove existing target if present (overwrite behavior)
-        try:
-            if arcpy.Exists(out_fc):
-                arcpy.management.Delete(out_fc)
-        except Exception:
-            logging.debug(f"[STAGE] Could not delete existing {out_fc} before import")
-        if layer_name:
-            src = f"{str(gpkg_path)}|layername={layer_name}"
-        else:
-            # List layers and pick the first one
-            layers = _list_gpkg_layers(gpkg_path)
-            if not layers:
-                logging.error(f"[STAGE] No layers found in GPKG {gpkg_path}")
-                return False
-            if len(layers) > 1:
-                logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", gpkg_path, ", ".join(layers))
-            src = f"{str(gpkg_path)}|layername={layers[0]}"
-        out_fc_path = Path(out_fc)
-        arcpy.conversion.FeatureClassToFeatureClass(src, str(out_fc_path.parent), out_fc_path.name)
-        logging.info(f"[STAGE] Imported GPKG {gpkg_path} -> {out_fc}")
-        return True
-    except Exception as e:
-        logging.error(f"[STAGE] Failed to import GPKG {gpkg_path}: {e}")
-        return False
-
-
-def _extract_hints(source: dict) -> tuple[str | None, str | None]:
-    """Extract and normalize include and layer hints from source configuration."""
-    include_hint = source.get('include')
-    raw = source.get('raw') or {}
-    layer_hint = raw.get('layer_name') or raw.get('layer')
-
-    # normalize include_hint to a single string if possible
-    include_hint = include_hint[0] if isinstance(include_hint, list) and include_hint else include_hint
-    include_hint = include_hint.strip() if isinstance(include_hint, str) else None
-
-    # normalize layer_hint to a single string if possible
-    layer_hint = layer_hint[0] if isinstance(layer_hint, list) and layer_hint else layer_hint
-    layer_hint = layer_hint.strip() if isinstance(layer_hint, str) else None
-
-    return include_hint, layer_hint
-
-
-def _find_candidates(auth_dir: Path, stem: str) -> list[Path]:
-    """Find candidate files in the authority directory."""
+def discover_files(directory: Path) -> list[Path]:
+    """Find all files we can import, with smart prioritization."""
     candidates = []
 
-    def _find_latest_file_case_insensitive(directory, pattern_stem, extensions):
-        files = []
-        for p in directory.iterdir():
-            if p.is_file():
-                ext_lc = p.suffix.lower()
-                name_lc = p.stem.lower()
-                for ext in extensions:
-                    if ext_lc == ext and (not pattern_stem or name_lc == pattern_stem.lower()):
-                        files.append(p)
-        if files:
-            files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            return files[0]
-        return None
+    # Search patterns in priority order
+    patterns = [
+        '*.gpkg',    # GeoPackage files (usually best quality)
+        '*.shp',     # Shapefiles
+        '*.zip'      # ZIP archives (may contain shapefiles/gpkg)
+    ]
 
-    for ext in ('.zip', '.gpkg', '.shp'):
-        if (f := _find_latest_file_case_insensitive(auth_dir, stem, [ext])) or \
-           (f := _find_latest_file_case_insensitive(auth_dir, None, [ext])):
-            candidates.append(f)
+    for pattern in patterns:
+        # Search recursively in directory
+        found = list(directory.rglob(pattern))
+        candidates.extend(found)
 
-    return candidates
+    # Remove duplicates and sort by modification time (newest first)
+    unique_files = []
+    seen_stems = set()
 
+    for file_path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        # Use file stem to avoid duplicate processing of same dataset
+        stem_key = file_path.stem.lower()
+        if stem_key not in seen_stems:
+            unique_files.append(file_path)
+            seen_stems.add(stem_key)
 
-def _process_zip_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str | None) -> bool:
-    """Process a ZIP file and import its contents."""
+    return unique_files
+
+def create_safe_name(file_path: Path, authority: str) -> str:
+    """Create ArcPy-safe name from file and authority."""
+    # Combine authority and file stem for unique naming
+    base_name = f"{authority}_{file_path.stem}"
+    return make_arcpy_safe_name(base_name)
+
+def make_arcpy_safe_name(name: str, max_length: int = 60) -> str:
+    """Create bulletproof ArcPy-compatible feature class names."""
+    if not name:
+        return "unnamed_fc"
+
+    # Normalize unicode and remove all accents/special chars
+    normalized = unicodedata.normalize('NFD', name)
+    ascii_name = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
+
+    # Ensure ASCII only
     try:
-        with zipfile.ZipFile(file_path, 'r') as zf:
-            namelist = zf.namelist()
-            shp_files = [n for n in namelist if n.lower().endswith('.shp')]
-            gpkg_files = [n for n in namelist if n.lower().endswith('.gpkg')]
-            auto_select = bool((source.get('raw') or {}).get('auto_select'))
+        ascii_name = ascii_name.encode('ascii', 'ignore').decode('ascii')
+    except:
+        ascii_name = "converted_name"
 
-            target_dir = file_path.with_suffix('')
-            target_dir.mkdir(parents=True, exist_ok=True)
+    # Apply ArcPy naming rules
+    clean = ascii_name.lower().strip()
+    clean = re.sub(r'[^a-z0-9]', '_', clean)  # Only letters, numbers, underscores
+    clean = re.sub(r'_+', '_', clean)         # Collapse multiple underscores
+    clean = clean.strip('_')                  # Remove leading/trailing underscores
 
-            # Handle preferred hint for shapefiles
-            if preferred_hint and (matched := [n for n in shp_files if preferred_hint.lower() in n.lower()]):
-                zf.extractall(target_dir)
-                shp_full = next(target_dir.glob(f"**/*{Path(matched[0]).name}"), None)
-                if shp_full:
-                    return _import_shapefile(shp_full, cfg, source['out_name'])
-                else:
-                    logging.error(f"[STAGE] Expected shapefile not found after extraction: {matched[0]}")
-                    return False
+    # Must start with letter (ArcPy requirement)
+    if clean and clean[0].isdigit():
+        clean = f"fc_{clean}"
 
-            # Handle shapefiles in archive
-            if len(shp_files) >= 1 and not gpkg_files:
-                zf.extractall(target_dir)
-                shp_paths = list(target_dir.glob('**/*.shp'))
-                if not shp_paths:
-                    logging.error("[STAGE] Expected shapefile not found after extraction")
-                    return False
-                if len(shp_paths) == 1 or not auto_select:
-                    if len(shp_paths) > 1:
-                        logging.info("[STAGE] Multiple shapefiles in %s; candidates: %s", file_path, ", ".join(str(p) for p in shp_paths))
-                    return _import_shapefile(shp_paths[0], cfg, source['out_name'])
-                # auto-select best shapefile by feature count
-                best = best_shapefile_by_count(shp_paths)
-                if best is None:
-                    logging.warning("[STAGE] auto_select could not pick shapefile (no counts>0); skipping %s", file_path)
-                    return False
-                logging.info("[STAGE] auto_select picked shapefile %s from %s", best, file_path)
-                return _import_shapefile(best, cfg, source['out_name'])
+    # Handle empty results
+    if not clean or len(clean) < 1:
+        clean = "default_fc"
 
-            # Handle GPKG files
-            if len(gpkg_files) >= 1:
-                zf.extractall(target_dir)
-                gpkg_full = next(target_dir.glob('**/*.gpkg'), None)
-                if gpkg_full:
-                    layer_name = preferred_hint if preferred_hint else None
-                    if layer_name:
-                        return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer_name)
-                    # No explicit layer provided
-                    if auto_select:
-                        # choose the gpkg layer with highest feature count
-                        layer = _best_gpkg_layer(gpkg_full)
-                        if not layer:
-                            logging.warning("[STAGE] auto_select could not pick gpkg layer in %s; skipping", gpkg_full)
-                            return False
-                        logging.info("[STAGE] auto_select picked gpkg layer '%s' in %s", layer, gpkg_full)
-                        return _import_gpkg(gpkg_full, cfg, source['out_name'], layer_name=layer)
-                    # Try importing first layer; also log the available layers
-                    layers = _list_gpkg_layers(gpkg_full)
-                    if len(layers) > 1:
-                        logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", gpkg_full, ", ".join(layers))
-                    return _import_gpkg(gpkg_full, cfg, source['out_name'])
-                else:
-                    logging.error("[STAGE] Expected GPKG file not found after extraction")
-                    return False
+    # Truncate to max length
+    clean = clean[:max_length]
 
-            logging.warning(f"[STAGE] Zip contains multiple or no shapefiles/gpkg; skipping {file_path}")
+    # Handle Windows reserved words
+    reserved = {'con', 'prn', 'aux', 'nul', 'com1', 'com2', 'lpt1', 'lpt2'}
+    if clean.lower() in reserved:
+        clean = f"{clean}_data"
+
+    return clean
+
+def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) -> bool:
+    """Import any supported file type to staging GDB."""
+    out_fc = f"{gdb_path.replace(chr(92), '/')}/{staging_name}"
+
+    # Clean up existing feature class (best effort)
+    try:
+        if arcpy.Exists(out_fc):
+            arcpy.management.Delete(out_fc)
+    except:
+        pass
+
+    try:
+        # Route to appropriate importer based on file type
+        suffix = file_path.suffix.lower()
+
+        if suffix == '.gpkg':
+            return import_gpkg(file_path, out_fc)
+        elif suffix == '.shp':
+            return import_shapefile(file_path, out_fc)
+        elif suffix == '.zip':
+            return import_zip(file_path, out_fc)
+        else:
+            logging.debug(f"[STAGE] Unsupported file type: {suffix}")
             return False
 
     except Exception as e:
-        logging.error(f"[STAGE] Error extracting zip {file_path}: {e}")
+        logging.error(f"[STAGE] Import failed for {file_path.name}: {e}")
         return False
 
-
-def _process_file(file_path: Path, cfg: dict, source: dict, preferred_hint: str | None) -> bool:
-    """Process a single file based on its extension."""
-    suffix = file_path.suffix.lower()
-    auto_select = bool((source.get('raw') or {}).get('auto_select'))
-
-    if suffix == '.zip':
-        return _process_zip_file(file_path, cfg, source, preferred_hint)
-    elif suffix == '.gpkg':
-        # If explicit layer is provided, use it; otherwise apply auto_select if enabled
-        if preferred_hint:
-            return _import_gpkg(file_path, cfg, source['out_name'], layer_name=preferred_hint)
-        if auto_select:
-            layer = _best_gpkg_layer(file_path)
-            if not layer:
-                logging.warning("[STAGE] auto_select could not pick gpkg layer in %s; skipping", file_path)
-                return False
-            logging.info("[STAGE] auto_select picked gpkg layer '%s' in %s", layer, file_path)
-            return _import_gpkg(file_path, cfg, source['out_name'], layer_name=layer)
-        layers = _list_gpkg_layers(file_path)
-        if len(layers) > 1:
-            logging.info("[STAGE] Multiple GPKG layers in %s; candidates: %s", file_path, ", ".join(layers))
-        return _import_gpkg(file_path, cfg, source['out_name'])
-    elif suffix == '.shp':
-        return _import_shapefile(file_path, cfg, source['out_name'])
-    else:
-        logging.info(f"[STAGE] Unsupported downloaded file type for {file_path}; skipping")
-        return False
-
-
-def ingest_downloads(cfg: dict) -> None:
-    downloads = Path(cfg['workspaces']['downloads'])
-
-    for source in cfg.get('sources', []):
-        if not source.get('include', True) or source.get('type') not in ('file', 'http'):
-            continue
-
-        auth_dir = downloads / (source.get('authority') or '')
-        if not auth_dir.exists():
-            logging.debug(f"[STAGE] No download dir for {source.get('name')} ({auth_dir})")
-            continue
-
-        stem = source.get('out_name') or ''
-        include_hint, layer_hint = _extract_hints(source)
-        preferred_hint = layer_hint or include_hint
-
-        if not (candidates := _find_candidates(auth_dir, stem)):
-            logging.info(f"[STAGE] No downloaded file found for source {source.get('name')} in {auth_dir}")
-            continue
-        if len(candidates) > 1:
-            logging.info("[STAGE] Multiple candidate files for %s in %s: %s", source.get('name'), auth_dir, ", ".join(str(c) for c in candidates))
-        _process_file(candidates[0], cfg, source, preferred_hint)
-
-def _list_gpkg_layers(gpkg_path: Path) -> list[str]:
-    """List feature layers inside a GPKG using arcpy.da.Walk (no env mutation)."""
+def import_gpkg(gpkg_path: Path, out_fc: str) -> bool:
+    """Import GPKG using actual layer discovery."""
     try:
-        layers: list[str] = []
+        # Discover actual layers in the GPKG
+        layers = discover_gpkg_layers(gpkg_path)
+
+        if not layers:
+            logging.error(f"[STAGE] No layers found in {gpkg_path.name}")
+            return False
+
+        # Import first valid layer
+        for layer_name in layers:
+            try:
+                # Use backslash format for ArcPy GPKG references
+                layer_ref = f"{gpkg_path}\\{layer_name}"
+
+                arcpy.conversion.FeatureClassToFeatureClass(
+                    layer_ref,
+                    str(Path(out_fc).parent),
+                    Path(out_fc).name
+                )
+
+                logging.debug(f"[STAGE] Imported GPKG layer: {layer_name}")
+                return True
+
+            except Exception as e:
+                logging.debug(f"[STAGE] Layer {layer_name} failed: {e}")
+                continue
+
+        logging.error(f"[STAGE] No importable layers in {gpkg_path.name}")
+        return False
+
+    except Exception as e:
+        logging.error(f"[STAGE] GPKG import failed: {e}")
+        return False
+
+def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
+    """Discover actual layer names in a GPKG file."""
+    layers = []
+
+    try:
+        # Method 1: Use arcpy.da.Walk (most reliable)
         for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
-            for f in filenames:
-                # Strip "main." prefix that some GPKG files have
-                layer_name = f.replace("main.", "") if f.startswith("main.") else f
-                layers.append(layer_name)
+            for filename in filenames:
+                # Clean layer name (remove main. prefix if present)
+                clean_name = filename.replace("main.", "")
+                if clean_name not in layers:
+                    layers.append(clean_name)
+
+        # Method 2: Use arcpy.Describe as fallback
+        if not layers:
+            try:
+                desc = arcpy.Describe(str(gpkg_path))
+                if hasattr(desc, 'children'):
+                    for child in desc.children:
+                        if hasattr(child, 'name'):
+                            clean_name = child.name.replace("main.", "")
+                            if clean_name not in layers:
+                                layers.append(clean_name)
+            except:
+                pass  # Fallback failed, continue with empty list
+
+        logging.debug(f"[STAGE] GPKG {gpkg_path.name} layers: {layers}")
         return layers
-    except Exception:
+
+    except Exception as e:
+        logging.debug(f"[STAGE] Failed to discover GPKG layers: {e}")
         return []
 
-def _best_gpkg_layer(gpkg_path: Path) -> str | None:
-    """Return the gpkg layer name with the highest feature count (>0), or None, using full paths."""
+def import_shapefile(shp_path: Path, out_fc: str) -> bool:
+    """Import shapefile directly."""
     try:
-        best_layer = None
-        best_count = -1
-        for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
-            for f in filenames:
-                # Strip "main." prefix for the layer name used in the path
-                layer_name = f.replace("main.", "") if f.startswith("main.") else f
-                full = f"{str(gpkg_path)}|layername={layer_name}"
-                try:
-                    res = arcpy.management.GetCount(full)
-                    cnt = int(str(res.getOutput(0)))
-                except Exception:
-                    cnt = -1
-                if cnt > best_count:
-                    best_count = cnt
-                    best_layer = layer_name
-        return best_layer if best_count > 0 else None
-    except Exception:
-        return None
+        arcpy.conversion.FeatureClassToFeatureClass(
+            str(shp_path),
+            str(Path(out_fc).parent),
+            Path(out_fc).name
+        )
+        return True
+    except Exception as e:
+        logging.error(f"[STAGE] Shapefile import failed: {e}")
+        return False
+
+def import_zip(zip_path: Path, out_fc: str) -> bool:
+    """Extract ZIP and import first valid dataset."""
+    extract_dir = zip_path.parent / f"_extract_{zip_path.stem}"
+
+    try:
+        # Extract ZIP contents
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(extract_dir)
+
+        # Find importable files in extraction (priority: GPKG > SHP)
+        candidates = []
+        candidates.extend(extract_dir.rglob('*.gpkg'))
+        candidates.extend(extract_dir.rglob('*.shp'))
+
+        # Try importing first valid file
+        for candidate in candidates:
+            try:
+                if candidate.suffix.lower() == '.gpkg':
+                    success = import_gpkg(candidate, out_fc)
+                else:  # .shp
+                    success = import_shapefile(candidate, out_fc)
+
+                if success:
+                    logging.debug(f"[STAGE] ZIP imported: {candidate.name}")
+                    return True
+
+            except Exception as e:
+                logging.debug(f"[STAGE] ZIP candidate failed: {e}")
+                continue
+
+        logging.warning(f"[STAGE] No importable data in {zip_path.name}")
+        return False
+
+    except Exception as e:
+        logging.error(f"[STAGE] ZIP processing failed: {e}")
+        return False
+
+    finally:
+        # Cleanup extraction directory
+        if extract_dir.exists():
+            try:
+                shutil.rmtree(extract_dir)
+            except:
+                pass  # Best effort cleanup
+
+def ensure_gdb_exists(gdb_path: str) -> None:
+    """Ensure staging geodatabase exists."""
+    gdb_path_obj = Path(gdb_path)
+
+    if not gdb_path_obj.exists():
+        gdb_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        arcpy.management.CreateFileGDB(
+            str(gdb_path_obj.parent),
+            gdb_path_obj.name
+        )
+        logging.info(f"[STAGE] Created staging GDB: {gdb_path}")
+
+def clear_staging_gdb(gdb_path: str) -> None:
+    """Clear all feature classes from staging GDB."""
+    try:
+        # Use arcpy.da.Walk to list feature classes without changing workspace
+        feature_classes = []
+        for dirpath, dirnames, filenames in arcpy.da.Walk(gdb_path, datatype="FeatureClass"):
+            feature_classes.extend(filenames)
+
+        # Delete each feature class
+        for fc in feature_classes:
+            try:
+                fc_path = f"{gdb_path}/{fc}"
+                if arcpy.Exists(fc_path):
+                    arcpy.management.Delete(fc_path)
+            except Exception as e:
+                logging.debug(f"[STAGE] Failed to delete {fc}: {e}")
+
+        logging.info(f"[STAGE] Cleared {len(feature_classes)} feature classes from staging")
+
+    except Exception as e:
+        logging.warning(f"[STAGE] Failed to clear staging GDB: {e}")
