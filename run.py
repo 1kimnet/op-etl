@@ -6,24 +6,7 @@ from etl.paths import ensure_workspaces
 
 
 def main():
-    """
-    Run the ETL orchestration: configure logging, load configuration, prepare workspaces, and execute selected pipeline stages.
-
-    This function:
-    - Configures logging to both logs/etl.log and the console.
-    - Parses command-line arguments to select which stages to run:
-      --download, --process, --load_sde (if none specified, all stages run).
-      Also accepts --config and --sources (paths to YAML files), optional --authority and --type filters, and a --plan flag (parsed but not acted on here).
-    - Loads configuration via load_config; on configuration failure it raises SystemExit with an error message.
-    - Ensures required workspaces via ensure_workspaces(cfg).
-    - Conditionally runs pipeline stages. Each stage is lazily imported and invoked:
-      - Download: runs download_http.run and download_rest.run, then stages file-based downloads via stage_files.stage_all_downloads.
-      - Processing: runs process.run.
-      - SDE loading: runs load_sde.run.
-
-    Raises:
-        SystemExit: if loading configuration fails (ConfigError).
-    """
+    """Run the ETL pipeline with fixed downloader modules."""
     # Ensure logs directory exists
     Path("logs").mkdir(exist_ok=True)
 
@@ -44,15 +27,13 @@ def main():
     p.add_argument("--process", action="store_true")
     p.add_argument("--load_sde", action="store_true")
     p.add_argument("--authority", help="Filter by authority")
-    p.add_argument("--type", help="Filter by source type (e.g., rest_api)")
-    p.add_argument("--plan", action="store_true", help="Dry-run mode: print planned actions")
+    p.add_argument("--type", help="Filter by source type")
     args = p.parse_args()
 
     try:
         cfg = load_config(args.config, args.sources)
     except ConfigError as e:
         logging.error(f"Config error: {e}")
-        # Fail fast with a clear message
         raise SystemExit(f"Config error: {e}")
 
     ensure_workspaces(cfg)
@@ -61,29 +42,32 @@ def main():
 
     if args.download or do_all:
         logging.info("Starting download process...")
-        # Import lazily to avoid heavy imports if not needed
-        from etl import download_http, download_rest, download_ogc, download_wfs
-        from etl.stage_files import stage_all_downloads
 
-        # Create a filtered list of sources based on command-line arguments
+        # Apply filters if specified
         sources = cfg["sources"]
         if args.authority:
             sources = [s for s in sources if s.get("authority") == args.authority]
         if args.type:
             sources = [s for s in sources if s.get("type") == args.type]
 
+        # Create filtered config
         filtered_cfg = cfg.copy()
         filtered_cfg["sources"] = sources
 
-        # Run downloaders.
+        # Import downloaders
+        from etl import download_http, download_atom, download_ogc, download_wfs, download_rest
+
+        # Run each downloader separately
+        # Each module now handles its own source filtering
         download_http.run(filtered_cfg)
-        download_rest.run(filtered_cfg)
+        download_atom.run(filtered_cfg)
         download_ogc.run(filtered_cfg)
         download_wfs.run(filtered_cfg)
+        download_rest.run(filtered_cfg)
 
-
-        # Stage file-based downloads into geodatabase
+        # Stage downloaded files
         logging.info("Starting staging process...")
+        from etl.stage_files import stage_all_downloads
         stage_all_downloads(filtered_cfg)
 
         logging.info("Download process finished.")

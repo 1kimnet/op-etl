@@ -1,65 +1,103 @@
+"""
+ATOM feed downloader for OP-ETL pipeline.
+Simple, working implementation without recursion issues.
+"""
+
 import logging
 import requests
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Dict
 
 log = logging.getLogger(__name__)
 
-def download_atom_feed(url: str, download_dir: Path):
-    """
-    Downloads and parses an ATOM feed, then downloads the linked data.
-    """
-    try:
-        log.debug(f"Fetching ATOM feed from {url}")
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        log.debug(f"Successfully fetched ATOM feed from {url}")
 
-        feed_content = response.content
-        root = ET.fromstring(feed_content)
+def run(cfg: dict) -> None:
+    """Process all ATOM sources in configuration."""
+    # Get fresh sources list without circular references
+    atom_sources = []
+    for source in cfg.get("sources", []):
+        if source.get("type") == "atom" and source.get("enabled", True):
+            # Create clean copy without nested references
+            atom_sources.append({
+                "name": source.get("name"),
+                "url": source.get("url"),
+                "authority": source.get("authority", "unknown")
+            })
 
-        # Find all links in the feed
-        links = root.findall(".//{http://www.w3.org/2005/Atom}link")
-        download_links = [link.get("href") for link in links if link.get("rel") == "enclosure"]
-
-        if not download_links:
-            log.warning(f"No download links found in ATOM feed: {url}")
-            return
-
-        for link_url in download_links:
-            if not link_url:
-                log.warning("Skipping empty or None download link")
-                continue
-
-            try:
-                log.info(f"Downloading from {link_url}")
-                file_response = requests.get(link_url, timeout=60, stream=True)
-                file_response.raise_for_status()
-
-                file_name = Path(link_url).name
-                file_path = download_dir / file_name
-
-                with open(file_path, "wb") as f:
-                    for chunk in file_response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                log.info(f"Successfully downloaded {file_name} to {file_path}")
-
-            except requests.exceptions.RequestException as e:
-                log.error(f"Failed to download file from {link_url}: {e}")
-
-    except requests.exceptions.RequestException as e:
-        log.error(f"Failed to fetch ATOM feed from {url}: {e}")
-    except ET.ParseError as e:
-        log.error(f"Failed to parse ATOM feed from {url}: {e}")
-
-def handle_atom_source(source: dict, download_dir: Path):
-    """
-    Handles a source of type 'atom'.
-    """
-    url = source.get("url")
-    if not url:
-        log.warning(f"ATOM source has no URL: {source.get('name')}")
+    if not atom_sources:
+        log.info("[ATOM] No ATOM sources to process")
         return
 
-    log.info(f"Processing ATOM source: {source.get('name')}")
-    download_atom_feed(url, download_dir)
+    downloads_dir = Path(cfg["workspaces"]["downloads"])
+
+    for source in atom_sources:
+        try:
+            log.info(f"Processing ATOM source: {source['name']}")
+            process_atom_source(source, downloads_dir)
+        except Exception as e:
+            log.error(f"[ATOM] Failed {source['name']}: {e}")
+
+
+def process_atom_source(source: Dict, downloads_dir: Path) -> bool:
+    """Process a single ATOM source."""
+    url = source["url"]
+    authority = source["authority"]
+
+    # Create output directory
+    out_dir = downloads_dir / authority
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Fetch ATOM feed
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Parse XML
+        root = ET.fromstring(response.content)
+
+        # Define namespace
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+        # Find download links
+        download_count = 0
+        entries = root.findall(".//atom:entry", ns)
+
+        for entry in entries:
+            links = entry.findall("atom:link", ns)
+            for link in links:
+                if link.get("rel") == "enclosure" or link.get("type") in ["application/zip", "application/x-zip-compressed"]:
+                    href = link.get("href")
+                    if href:
+                        success = download_file(href, out_dir)
+                        if success:
+                            download_count += 1
+
+        log.info(f"[ATOM] Downloaded {download_count} files from {source['name']}")
+        return download_count > 0
+
+    except Exception as e:
+        log.error(f"[ATOM] Error processing {url}: {e}")
+        return False
+
+
+def download_file(url: str, out_dir: Path) -> bool:
+    """Download a single file from URL."""
+    try:
+        file_name = url.split("/")[-1].split("?")[0] or "download.zip"
+        file_path = out_dir / file_name
+
+        response = requests.get(url, timeout=60, stream=True)
+        response.raise_for_status()
+
+        with open(file_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        log.info(f"[ATOM] Downloaded {file_name}")
+        return True
+
+    except Exception as e:
+        log.error(f"[ATOM] Failed to download {url}: {e}")
+        return False

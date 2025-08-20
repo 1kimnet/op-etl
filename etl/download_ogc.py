@@ -1,6 +1,6 @@
 """
-OGC API Features handler for OP-ETL pipeline.
-Supports pagination, bbox filtering, and collection discovery.
+OGC API Features downloader for OP-ETL pipeline.
+Fixed to avoid recursion issues.
 """
 
 import logging
@@ -8,110 +8,98 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urljoin
 import requests
 
-from .download_http import ensure_dir
+log = logging.getLogger(__name__)
 
 
 def run(cfg: dict) -> None:
-    """Process all OGC API sources in the configuration."""
-    ogc_sources = [s for s in cfg.get("sources", [])
-                   if s.get("type") == "ogc_api" and s.get("enabled", True)]
+    """Process all OGC API sources."""
+    # Extract sources without circular references
+    ogc_sources = []
+    for source in cfg.get("sources", []):
+        if source.get("type") == "ogc" and source.get("enabled", True):
+            # Create clean copy
+            ogc_sources.append({
+                "name": source.get("name"),
+                "url": source.get("url"),
+                "authority": source.get("authority", "unknown"),
+                "raw": source.get("raw", {}).copy() if source.get("raw") else {}
+            })
 
     if not ogc_sources:
-        logging.info("[OGC] No OGC API sources found")
+        log.info("[OGC] No OGC sources to process")
         return
 
     downloads_dir = Path(cfg["workspaces"]["downloads"])
-    processed_count = 0
+
+    # Get global bbox if configured
+    global_bbox = None
+    if cfg.get("use_bbox_filter") and cfg.get("global_ogc_bbox"):
+        bbox_cfg = cfg["global_ogc_bbox"]
+        if bbox_cfg.get("coords"):
+            global_bbox = bbox_cfg["coords"]
 
     for source in ogc_sources:
         try:
-            success = process_ogc_source(source, downloads_dir, cfg)
-            if success:
-                processed_count += 1
-                logging.info(f"[OGC] ✓ {source['name']}")
-            else:
-                logging.warning(f"[OGC] ✗ {source['name']} failed")
+            log.info(f"[OGC] Processing {source['name']}")
+            process_ogc_source(source, downloads_dir, global_bbox)
         except Exception as e:
-            logging.error(f"[OGC] Error processing {source['name']}: {e}")
-
-    logging.info(f"[OGC] Processed {processed_count} OGC API sources")
+            log.error(f"[OGC] Failed {source['name']}: {e}")
 
 
-def process_ogc_source(source: dict, downloads_dir: Path, cfg: dict) -> bool:
-    """Process a single OGC API source."""
+def process_ogc_source(source: Dict, downloads_dir: Path, global_bbox: Optional[List] = None) -> bool:
+    """Process a single OGC source."""
     base_url = source["url"]
-    authority = source.get("authority", "unknown")
-    name = source.get("name", "unnamed")
+    authority = source["authority"]
+    name = source["name"]
+    raw = source.get("raw", {})
 
-    # Check for recursion issues flag
-    if source.get("extra", {}).get("recursion_issues"):
-        logging.warning(f"[OGC] Skipping {name} (recursion issues - needs manual fix)")
-        return False
+    # Create output directory
+    out_dir = downloads_dir / authority / name
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_config = source.get("extra", {})
+    # Get configuration
+    collections = raw.get("collections", [])
+    page_size = raw.get("page_size", 1000)
+    supports_bbox_crs = raw.get("supports_bbox_crs", False)
 
-    # Extract configuration
-    collections = raw_config.get("collections", [])
-    page_size = raw_config.get("page_size", 1000)
-    supports_bbox_crs = raw_config.get("supports_bbox_crs", True)
-
-    # Get bbox from source or global config
-    bbox = raw_config.get("bbox")
-    bbox_sr = raw_config.get("bbox_sr", 3006)
-
-    if not bbox:
-        # Try global bbox from config
-        global_bbox = cfg.get("global_ogc_bbox", {})
-        if global_bbox.get("coords"):
-            bbox = global_bbox["coords"]
-            bbox_sr = global_bbox.get("crs", "CRS84")
-            if bbox_sr == "CRS84":
-                bbox_sr = 4326  # WGS84
+    # Use source bbox or global bbox
+    bbox = raw.get("bbox") or global_bbox
 
     try:
-        # Create output directory
-        auth_dir = ensure_dir(downloads_dir / authority)
-        out_dir = ensure_dir(auth_dir / name)
-
         # Auto-discover collections if none specified
         if not collections:
             collections = discover_collections(base_url)
             if not collections:
-                logging.warning(f"[OGC] No collections found for {base_url}")
+                log.warning(f"[OGC] No collections found for {name}")
                 return False
 
         total_features = 0
 
         # Process each collection
         for collection in collections:
-            features_count = fetch_collection_to_files(
+            feature_count = fetch_collection(
                 base_url, collection, out_dir,
                 page_size=page_size,
                 bbox=bbox,
-                bbox_sr=bbox_sr,
                 supports_bbox_crs=supports_bbox_crs
             )
-            total_features += features_count
-            logging.debug(f"[OGC] Collection {collection}: {features_count} features")
+            total_features += feature_count
+            log.info(f"[OGC] Collection {collection}: {feature_count} features")
 
-        if total_features > 0:
-            logging.info(f"[OGC] Downloaded {total_features} features from {name}")
-            return True
-
-        return False
+        log.info(f"[OGC] Total features from {name}: {total_features}")
+        return total_features > 0
 
     except Exception as e:
-        logging.error(f"[OGC] Failed to process {base_url}: {e}")
+        log.error(f"[OGC] Error processing {name}: {e}")
         return False
 
 
 def discover_collections(base_url: str) -> List[str]:
-    """Auto-discover available collections from OGC API."""
+    """Discover available collections."""
     try:
-        collections_url = urljoin(base_url.rstrip("/") + "/", "collections")
+        collections_url = f"{base_url.rstrip('/')}/collections"
 
         response = requests.get(collections_url, timeout=30)
         response.raise_for_status()
@@ -120,52 +108,51 @@ def discover_collections(base_url: str) -> List[str]:
         collections = data.get("collections", [])
 
         collection_ids = []
-        for collection in collections:
-            if isinstance(collection, dict) and "id" in collection:
-                collection_ids.append(collection["id"])
+        for coll in collections:
+            if isinstance(coll, dict) and "id" in coll:
+                collection_ids.append(coll["id"])
 
-        logging.debug(f"[OGC] Discovered {len(collection_ids)} collections")
         return collection_ids
 
     except Exception as e:
-        logging.warning(f"[OGC] Failed to discover collections from {base_url}: {e}")
+        log.warning(f"[OGC] Failed to discover collections: {e}")
         return []
 
 
-def fetch_collection_to_files(
+def fetch_collection(
     base_url: str,
     collection: str,
     out_dir: Path,
     page_size: int = 1000,
-    bbox: Optional[List[float]] = None,
-    bbox_sr: int = 3006,
-    supports_bbox_crs: bool = True
+    bbox: Optional[List] = None,
+    supports_bbox_crs: bool = False
 ) -> int:
-    """Fetch all features from a collection and save as GeoJSON files."""
+    """Fetch all features from a collection."""
+    items_url = f"{base_url.rstrip('/')}/collections/{collection}/items"
 
-    # Build items URL
-    base = base_url.rstrip("/") + "/"
-    items_url = urljoin(base, f"collections/{collection}/items")
+    # Build parameters
+    params = {"limit": str(page_size)}
 
-    # Build initial parameters
-    params: Dict[str, str] = {"limit": str(page_size)}
-
-    if bbox:
+    if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox)
-        if supports_bbox_crs and bbox_sr != 4326:
-            params["bbox-crs"] = f"EPSG:{bbox_sr}"
+        if supports_bbox_crs:
+            params["bbox-crs"] = "EPSG:3006"
 
     part_count = 0
     total_features = 0
     current_url = items_url
     current_params = params
 
-    # Add delay from config if available
-    delay = 0.1  # Default delay
+    delay = 0.1  # Rate limiting
 
     while current_url:
         try:
-            response = requests.get(current_url, params=current_params, timeout=60)
+            # Make request
+            if current_params:
+                response = requests.get(current_url, params=current_params, timeout=60)
+            else:
+                response = requests.get(current_url, timeout=60)
+
             response.raise_for_status()
 
             data = response.json()
@@ -174,7 +161,7 @@ def fetch_collection_to_files(
             if not features:
                 break
 
-            # Save this page
+            # Save page
             part_count += 1
             total_features += len(features)
 
@@ -183,93 +170,21 @@ def fetch_collection_to_files(
                 json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
 
             # Find next page
-            current_url = get_next_page_url(data.get("links", []))
-            current_params = None  # Parameters are in the next URL
+            next_url = None
+            links = data.get("links", [])
+            for link in links:
+                if isinstance(link, dict) and link.get("rel") == "next":
+                    next_url = link.get("href")
+                    break
 
-            # Rate limiting
+            current_url = next_url
+            current_params = None  # Next URL has params built in
+
+            # Rate limit
             time.sleep(delay)
 
-        except requests.exceptions.RequestException as e:
-            logging.error(f"[OGC] Request failed for {collection}: {e}")
-            break
         except Exception as e:
-            logging.error(f"[OGC] Unexpected error for {collection}: {e}")
+            log.error(f"[OGC] Request failed for {collection}: {e}")
             break
 
     return total_features
-
-
-def get_next_page_url(links: List[Dict]) -> Optional[str]:
-    """Extract next page URL from OGC API links."""
-    if not links:
-        return None
-
-    for link in links:
-        if isinstance(link, dict) and link.get("rel") == "next":
-            return link.get("href")
-
-    return None
-
-
-def validate_ogc_endpoint(base_url: str) -> bool:
-    """Check if URL is a valid OGC API Features endpoint."""
-    try:
-        # Try to access the landing page
-        response = requests.get(base_url, timeout=10)
-        response.raise_for_status()
-
-        data = response.json()
-
-        # Look for OGC API indicators
-        links = data.get("links", [])
-        for link in links:
-            if isinstance(link, dict):
-                rel = link.get("rel", "")
-                if rel in ["service-desc", "service-doc", "collections"]:
-                    return True
-
-        # Check for collections endpoint
-        collections_url = urljoin(base_url.rstrip("/") + "/", "collections")
-        collections_response = requests.get(collections_url, timeout=10)
-
-        return collections_response.status_code == 200
-
-    except Exception:
-        return False
-
-
-def get_collection_info(base_url: str, collection_id: str) -> Optional[Dict]:
-    """Get metadata about a specific collection."""
-    try:
-        collection_url = urljoin(
-            base_url.rstrip("/") + "/",
-            f"collections/{collection_id}"
-        )
-
-        response = requests.get(collection_url, timeout=15)
-        response.raise_for_status()
-
-        return response.json()
-
-    except Exception as e:
-        logging.debug(f"[OGC] Failed to get collection info for {collection_id}: {e}")
-        return None
-
-
-def estimate_feature_count(base_url: str, collection_id: str) -> Optional[int]:
-    """Try to estimate total feature count for a collection."""
-    try:
-        # Try a small request to see if numberMatched is provided
-        items_url = urljoin(
-            base_url.rstrip("/") + "/",
-            f"collections/{collection_id}/items"
-        )
-
-        response = requests.get(items_url, params={"limit": 1}, timeout=15)
-        response.raise_for_status()
-
-        data = response.json()
-        return data.get("numberMatched")
-
-    except Exception:
-        return None

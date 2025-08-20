@@ -1,66 +1,73 @@
 """
-WFS (Web Feature Service) handler for OP-ETL pipeline.
-Handles sources like SJV's INSPIRE WFS services.
+WFS downloader for OP-ETL pipeline.
+Fixed to avoid recursion issues.
 """
 
 import logging
 import json
 from pathlib import Path
+from typing import Dict
 import requests
 
-from .download_http import ensure_dir
+log = logging.getLogger(__name__)
 
 
 def run(cfg: dict) -> None:
-    """Process all WFS sources in configuration."""
-    wfs_sources = [s for s in cfg.get("sources", [])
-                   if s.get("type") == "wfs" and s.get("enabled", True)]
+    """Process all WFS sources."""
+    # Extract sources cleanly
+    wfs_sources = []
+    for source in cfg.get("sources", []):
+        if source.get("type") == "wfs" and source.get("enabled", True):
+            # Create clean copy
+            wfs_sources.append({
+                "name": source.get("name"),
+                "url": source.get("url"),
+                "authority": source.get("authority", "unknown"),
+                "raw": source.get("raw", {}).copy() if source.get("raw") else {}
+            })
 
     if not wfs_sources:
-        logging.info("[WFS] No WFS sources found")
+        log.info("[WFS] No WFS sources to process")
         return
 
     downloads_dir = Path(cfg["workspaces"]["downloads"])
-    processed_count = 0
 
     for source in wfs_sources:
         try:
-            success = process_wfs_source(source, downloads_dir)
-            if success:
-                processed_count += 1
-                logging.info(f"[WFS] ✓ {source['name']}")
-            else:
-                logging.warning(f"[WFS] ✗ {source['name']} failed")
+            log.info(f"[WFS] Processing {source['name']}")
+            process_wfs_source(source, downloads_dir)
         except Exception as e:
-            logging.error(f"[WFS] Error processing {source['name']}: {e}")
-
-    logging.info(f"[WFS] Processed {processed_count} WFS sources")
+            log.error(f"[WFS] Failed {source['name']}: {e}")
 
 
-def process_wfs_source(source: dict, downloads_dir: Path) -> bool:
+def process_wfs_source(source: Dict, downloads_dir: Path) -> bool:
     """Process a single WFS source."""
     url = source["url"]
-    authority = source.get("authority", "unknown")
-    name = source.get("name", "unnamed")
+    authority = source["authority"]
+    name = source["name"]
 
-    # Check for recursion issues flag
-    if source.get("extra", {}).get("recursion_issues"):
-        logging.warning(f"[WFS] Skipping {name} (recursion issues - needs manual fix)")
+    # Create output directory
+    out_dir = downloads_dir / authority
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Check if URL is already a GetFeature request
+        if "GetFeature" in url and "typeName" in url:
+            # Direct GetFeature URL
+            return download_direct_wfs(url, out_dir, name)
+        else:
+            # WFS service URL
+            return download_wfs_service(url, source, out_dir, name)
+
+    except Exception as e:
+        log.error(f"[WFS] Error processing {name}: {e}")
         return False
 
-    # Check if URL already contains GetFeature request
-    if "GetFeature" in url and "typeName" in url:
-        return download_wfs_direct(url, downloads_dir, authority, name)
-    else:
-        return download_wfs_service(url, source, downloads_dir, authority, name)
 
-
-def download_wfs_direct(url: str, downloads_dir: Path, authority: str, name: str) -> bool:
-    """Download from direct WFS GetFeature URL."""
+def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
+    """Download from direct GetFeature URL."""
     try:
-        auth_dir = ensure_dir(downloads_dir / authority)
-
-        # Force GeoJSON output if not specified
+        # Ensure GeoJSON output
         if "outputFormat=" not in url:
             separator = "&" if "?" in url else "?"
             url = f"{url}{separator}outputFormat=application/json"
@@ -68,36 +75,42 @@ def download_wfs_direct(url: str, downloads_dir: Path, authority: str, name: str
         response = requests.get(url, timeout=120)
         response.raise_for_status()
 
-        # Try to save as GeoJSON
+        # Save response
         try:
             data = response.json()
-            out_file = auth_dir / f"{name}.geojson"
+            out_file = out_dir / f"{name}.geojson"
             with open(out_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
+            log.info(f"[WFS] Saved {name} as GeoJSON")
         except json.JSONDecodeError:
-            # Fallback: save as GML/XML
-            out_file = auth_dir / f"{name}.gml"
+            # Save as GML
+            out_file = out_dir / f"{name}.gml"
             out_file.write_text(response.text, encoding='utf-8')
+            log.info(f"[WFS] Saved {name} as GML")
 
-        logging.info(f"[WFS] Downloaded {name} to {out_file}")
         return True
 
     except Exception as e:
-        logging.error(f"[WFS] Failed to download {url}: {e}")
+        log.error(f"[WFS] Download failed: {e}")
         return False
 
 
-def download_wfs_service(url: str, source: dict, downloads_dir: Path, authority: str, name: str) -> bool:
-    """Download from WFS service base URL."""
-    try:
-        raw = source.get("raw", {})
-        typename = raw.get("typename") or raw.get("typeName")
+def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str) -> bool:
+    """Download from WFS service URL."""
+    raw = source.get("raw", {})
 
-        if not typename:
-            logging.warning(f"[WFS] No typename specified for {name}")
+    # Extract typename from raw config
+    typename = raw.get("typename") or raw.get("typeName")
+    if not typename:
+        # Try to extract from URL if present
+        if "typeName=" in url:
+            typename = url.split("typeName=")[1].split("&")[0]
+        else:
+            log.warning(f"[WFS] No typename specified for {name}")
             return False
 
-        # Build GetFeature parameters
+    try:
+        # Build GetFeature request
         params = {
             "service": "WFS",
             "version": "2.0.0",
@@ -106,29 +119,30 @@ def download_wfs_service(url: str, source: dict, downloads_dir: Path, authority:
             "outputFormat": "application/json"
         }
 
-        # Add bbox if specified
+        # Add bbox if configured
         bbox = raw.get("bbox")
-        if bbox:
+        if bbox and len(bbox) >= 4:
             params["bbox"] = ",".join(str(v) for v in bbox)
-            params["srsName"] = f"EPSG:{raw.get('bbox_sr', 4326)}"
-
-        auth_dir = ensure_dir(downloads_dir / authority)
+            bbox_sr = raw.get("bbox_sr", 4326)
+            params["srsName"] = f"EPSG:{bbox_sr}"
 
         response = requests.get(url, params=params, timeout=120)
         response.raise_for_status()
 
+        # Save response
         try:
             data = response.json()
-            out_file = auth_dir / f"{name}.geojson"
+            out_file = out_dir / f"{name}.geojson"
             with open(out_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
+            log.info(f"[WFS] Saved {typename} as GeoJSON")
         except json.JSONDecodeError:
-            out_file = auth_dir / f"{name}.gml"
+            out_file = out_dir / f"{name}.gml"
             out_file.write_text(response.text, encoding='utf-8')
+            log.info(f"[WFS] Saved {typename} as GML")
 
-        logging.info(f"[WFS] Downloaded {typename} to {out_file}")
         return True
 
     except Exception as e:
-        logging.error(f"[WFS] Failed to download from {url}: {e}")
+        log.error(f"[WFS] Service request failed: {e}")
         return False
