@@ -62,15 +62,29 @@ def main():
     if args.download or do_all:
         logging.info("Starting download process...")
         # Import lazily to avoid heavy imports if not needed
-        from etl import download_http, download_rest
+        from etl import download_http, download_rest, download_ogc, download_wfs
         from etl.stage_files import stage_all_downloads
 
-        download_http.run(cfg)
-        download_rest.run(cfg)
+        # Create a filtered list of sources based on command-line arguments
+        sources = cfg["sources"]
+        if args.authority:
+            sources = [s for s in sources if s.get("authority") == args.authority]
+        if args.type:
+            sources = [s for s in sources if s.get("type") == args.type]
+
+        filtered_cfg = cfg.copy()
+        filtered_cfg["sources"] = sources
+
+        # Run downloaders.
+        download_http.run(filtered_cfg)
+        download_rest.run(filtered_cfg)
+        download_ogc.run(filtered_cfg)
+        download_wfs.run(filtered_cfg)
+
 
         # Stage file-based downloads into geodatabase
         logging.info("Starting staging process...")
-        stage_all_downloads(cfg)
+        stage_all_downloads(filtered_cfg)
 
         logging.info("Download process finished.")
 

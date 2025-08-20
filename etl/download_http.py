@@ -365,10 +365,15 @@ def run(cfg: dict) -> None:
                     extracted = maybe_unzip(file_path, auth_dir)
                     msg_path = str(extracted or file_path)
                     status = "OK"
-            elif s["type"] in ("rest", "ogc", "atom", "atom_feed"):
-                # Placeholders for later steps; for now we just record intention.
-                msg_path = f"planned handler not implemented yet for type={s['type']}"
-                status = "TODO"
+            elif s["type"] == "atom":
+                from . import download_atom
+                download_atom.handle_atom_source(s, auth_dir)
+                status = "OK"
+                msg_path = str(auth_dir)
+            elif s["type"] in ("rest", "ogc", "wfs"):
+                # These are handled by other modules, just log a note
+                msg_path = f"handled by {s['type']} downloader"
+                status = "NOTE"
             else:
                 msg_path = f"unknown type={s['type']}"
                 status = "SKIP"
