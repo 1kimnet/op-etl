@@ -1,41 +1,93 @@
-# etl/load_sde.py
+# Replace etl/load_sde.py with this simplified version:
+
 import logging
 import arcpy
+from pathlib import Path
 
 def run(cfg):
-    """
-    Load feature classes from a staging geodatabase into an SDE connection.
-    
-    Processes each source listed in cfg["sources"] (a list of dicts with at least "out_name" and optional "include" boolean). For each included source this function:
-    - Builds src as "{staging_gdb}/{out_name}" and dest as "{sde_conn}/{out_name}".
-    - Skips the source if the src does not exist in the staging GDB (logs a warning).
-    - If dest does not exist in SDE, creates an empty feature class in SDE using the source as a template and preserving geometry type and spatial reference.
-    - If dest exists, truncates it.
-    - Appends all features from src to dest with schema_type="NO_TEST" and logs an info message.
-    
-    Parameters:
-        cfg (dict): Configuration mapping. Required keys:
-            - "workspaces": dict containing "sde_conn" (SDE connection path) and "staging_gdb" (staging geodatabase path).
-            - "sources": optional list of source dicts; each source must include "out_name" (feature class name) and may include "include" (bool).
-    
-    Returns:
-        None
-    """
-    sde = cfg["workspaces"]["sde_conn"]
-    for s in cfg.get("sources", []):
-        if not s.get("include", True):
-            continue
-        src = f'{cfg["workspaces"]["staging_gdb"]}/{s["out_name"]}'
-        dest = f'{sde}/{s["out_name"]}'   # keep same name for now
-        # If the source in the staging GDB doesn't exist, skip gracefully.
-        if not arcpy.Exists(src):
-            logging.warning(f"[LOAD] Source missing in staging, skipping: {src}")
-            continue
-        if not arcpy.Exists(dest):
-            # first time: create empty dest by copying schema
-            arcpy.management.CreateFeatureclass(sde, s["out_name"], geometry_type=arcpy.Describe(src).shapeType, template=src, spatial_reference=arcpy.Describe(src).spatialReference)
-        else:
-            arcpy.management.TruncateTable(dest)
+    """Load all staged feature classes to SDE."""
+    staging_gdb = cfg["workspaces"]["staging_gdb"]
+    sde_conn = cfg["workspaces"].get("sde_conn")
 
-        arcpy.management.Append(inputs=src, target=dest, schema_type="NO_TEST")
-        logging.info(f"[LOAD] {src} -> {dest}")
+    if not sde_conn:
+        logging.warning("[LOAD] No SDE connection configured")
+        return
+
+    # List actual feature classes in staging using arcpy.da.Walk
+    feature_classes = []
+    try:
+        for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
+            feature_classes.extend(filenames)
+    except Exception as e:
+        logging.error(f"[LOAD] Cannot access staging GDB: {e}")
+        return
+
+    if not feature_classes:
+        logging.info("[LOAD] No feature classes found in staging")
+        return
+
+    loaded_count = 0
+
+    for fc_name in feature_classes:
+        src_fc = f"{staging_gdb}/{fc_name}"
+        dest_fc = f"{sde_conn}/{fc_name}"
+
+        try:
+            if not arcpy.Exists(src_fc):
+                continue
+
+            success = load_to_sde(src_fc, dest_fc, fc_name)
+            if success:
+                loaded_count += 1
+                logging.info(f"[LOAD] ✓ {fc_name}")
+            else:
+                logging.warning(f"[LOAD] ✗ {fc_name} failed")
+
+        except Exception as e:
+            logging.error(f"[LOAD] Error loading {fc_name}: {e}")
+
+    logging.info(f"[LOAD] Loaded {loaded_count} feature classes to SDE")
+
+def load_to_sde(src_fc: str, dest_fc: str, fc_name: str) -> bool:
+    """Load feature class to SDE with truncate-and-load strategy."""
+    try:
+        if arcpy.Exists(dest_fc):
+            # Truncate existing data
+            arcpy.management.TruncateTable(dest_fc)
+        else:
+            # Create new feature class from template
+            create_sde_fc(src_fc, dest_fc)
+
+        # Append data
+        arcpy.management.Append(
+            inputs=src_fc,
+            target=dest_fc,
+            schema_type="NO_TEST"
+        )
+
+        return True
+
+    except Exception as e:
+        logging.error(f"[LOAD] Failed to load {fc_name}: {e}")
+        return False
+
+def create_sde_fc(template_fc: str, dest_fc: str):
+    """Create feature class in SDE using staging template."""
+    try:
+        desc = arcpy.Describe(template_fc)
+
+        # Extract workspace and feature class name
+        sde_workspace = str(Path(dest_fc).parent)
+        fc_name = Path(dest_fc).name
+
+        arcpy.management.CreateFeatureclass(
+            out_path=sde_workspace,
+            out_name=fc_name,
+            geometry_type=desc.shapeType,
+            template=template_fc,
+            spatial_reference=desc.spatialReference
+        )
+
+    except Exception as e:
+        logging.error(f"[LOAD] Failed to create SDE feature class: {e}")
+        raise

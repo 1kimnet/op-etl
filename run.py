@@ -1,5 +1,6 @@
 import argparse
 import logging
+from pathlib import Path
 from etl.config import load_config, ConfigError
 from etl.paths import ensure_workspaces
 
@@ -7,7 +8,7 @@ from etl.paths import ensure_workspaces
 def main():
     """
     Run the ETL orchestration: configure logging, load configuration, prepare workspaces, and execute selected pipeline stages.
-    
+
     This function:
     - Configures logging to both logs/etl.log and the console.
     - Parses command-line arguments to select which stages to run:
@@ -16,18 +17,21 @@ def main():
     - Loads configuration via load_config; on configuration failure it raises SystemExit with an error message.
     - Ensures required workspaces via ensure_workspaces(cfg).
     - Conditionally runs pipeline stages. Each stage is lazily imported and invoked:
-      - Download: runs download_http.run and download_rest.run, then ingests file-based downloads via stage_files.ingest_downloads.
+      - Download: runs download_http.run and download_rest.run, then stages file-based downloads via stage_files.stage_all_downloads.
       - Processing: runs process.run.
       - SDE loading: runs load_sde.run.
-    
+
     Raises:
         SystemExit: if loading configuration fails (ConfigError).
     """
+    # Ensure logs directory exists
+    Path("logs").mkdir(exist_ok=True)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("logs/etl.log"),
+            logging.FileHandler("logs/etl.log", encoding='utf-8'),
             logging.StreamHandler()
         ]
     )
@@ -59,11 +63,15 @@ def main():
         logging.info("Starting download process...")
         # Import lazily to avoid heavy imports if not needed
         from etl import download_http, download_rest
+        from etl.stage_files import stage_all_downloads
+
         download_http.run(cfg)
         download_rest.run(cfg)
-        # Ingest downloaded file-based sources into staging.gdb
-        from etl import stage_files
-        stage_files.ingest_downloads(cfg)
+
+        # Stage file-based downloads into geodatabase
+        logging.info("Starting staging process...")
+        stage_all_downloads(cfg)
+
         logging.info("Download process finished.")
 
     if args.process or do_all:
