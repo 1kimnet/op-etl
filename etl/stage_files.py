@@ -54,14 +54,26 @@ def _import_shapefile(shp_path: Path, cfg, out_name: str) -> bool:
         except Exception:
             # best-effort delete; continue to attempt import
             logging.debug(f"[STAGE] Could not delete existing {out_fc} before import")
-        out_fc_path = Path(out_fc)
-        arcpy.conversion.FeatureClassToFeatureClass(
-            str(shp_path),
-            str(out_fc_path.parent),
-            out_fc_path.name
-        )
-        logging.info(f"[STAGE] Imported shapefile {shp_path} -> {out_fc}")
-        return True
+
+        # Handle potential character encoding issues in shapefile path
+        try:
+            out_fc_path = Path(out_fc)
+            arcpy.conversion.FeatureClassToFeatureClass(
+                str(shp_path),
+                str(out_fc_path.parent),
+                out_fc_path.name
+            )
+            logging.info(f"[STAGE] Imported shapefile {shp_path} -> {out_fc}")
+            return True
+        except Exception as char_error:
+            if "invalid characters" in str(char_error).lower():
+                logging.warning(f"[STAGE] Shapefile path contains invalid characters, skipping: {shp_path}")
+                logging.warning(f"[STAGE] Character error: {char_error}")
+                return False
+            else:
+                # Re-raise if it's not a character issue
+                raise char_error
+
     except Exception as e:
         logging.error(f"[STAGE] Failed to import shapefile {shp_path}: {e}")
         return False

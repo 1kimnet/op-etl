@@ -1,3 +1,6 @@
+# Workspace settings
+examine_gpkg.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -223,3 +226,7 @@ __marimo__/
 #Ignore insiders AI rules
 .github\copilot-instructions.md
 _scripts/create_sde_connection.py
+docs/comment-preservation-solution.md
+docs/testing-framework-guide.md
+.gitignore
+config/sources_backup.yaml

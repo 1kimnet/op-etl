@@ -146,8 +146,9 @@ def http_download(url: str, out_dir: Path, file_hint: str) -> Path:
     ensure_dir(out_dir)
 
     # Create a cleaner filename from the URL
+    from urllib.parse import unquote
     url_path = Path(url.split("?")[0])
-    original_name = url_path.name or "download"
+    original_name = unquote(url_path.name) or "download"  # URL decode the filename
 
     # Keep original extension
     ext = url_path.suffix
