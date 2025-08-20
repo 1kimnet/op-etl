@@ -42,7 +42,7 @@ def get_logger() -> logging.Logger:
     log = logging.getLogger("op-etl")
     if log.handlers:
         return log
-    log.setLevel(logging.INFO)
+    log.setLevel(logging.DEBUG)
     ch = logging.StreamHandler(sys.stdout)
     fh = logging.FileHandler("op-etl.log", encoding="utf-8")
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
