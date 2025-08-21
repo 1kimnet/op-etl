@@ -5,7 +5,7 @@ examine_gpkg.py
 __pycache__/
 *.py[codz]
 *$py.class
-
+scripts/
 # C extensions
 *.so
 data

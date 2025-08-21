@@ -60,9 +60,10 @@ def discover_files(directory: Path) -> list[Path]:
 
     # Search patterns in priority order
     patterns = [
-        '*.gpkg',    # GeoPackage files (usually best quality)
-        '*.shp',     # Shapefiles
-        '*.zip'      # ZIP archives (may contain shapefiles/gpkg)
+        '*.gpkg',     # GeoPackage files (usually best quality)
+        '*.geojson',  # GeoJSON (from REST/OGC/WFS)
+        '*.shp',      # Shapefiles
+        '*.zip'       # ZIP archives (may contain shapefiles/gpkg)
     ]
 
     for pattern in patterns:
@@ -75,6 +76,10 @@ def discover_files(directory: Path) -> list[Path]:
     seen_stems = set()
 
     for file_path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        # Skip legacy paginated files like part_001.geojson
+        fname = file_path.name.lower()
+        if fname.endswith('.geojson') and fname.startswith('part_'):
+            continue
         # Use file stem to avoid duplicate processing of same dataset
         stem_key = file_path.stem.lower()
         if stem_key not in seen_stems:
@@ -101,7 +106,7 @@ def make_arcpy_safe_name(name: str, max_length: int = 60) -> str:
     # Ensure ASCII only
     try:
         ascii_name = ascii_name.encode('ascii', 'ignore').decode('ascii')
-    except:
+    except Exception:
         ascii_name = "converted_name"
 
     # Apply ArcPy naming rules
@@ -136,7 +141,7 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
     try:
         if arcpy.Exists(out_fc):
             arcpy.management.Delete(out_fc)
-    except:
+    except Exception:
         pass
 
     try:
@@ -145,6 +150,8 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
 
         if suffix == '.gpkg':
             return import_gpkg(file_path, out_fc)
+        elif suffix == '.geojson':
+            return import_geojson(file_path, out_fc)
         elif suffix == '.shp':
             return import_shapefile(file_path, out_fc)
         elif suffix == '.zip':
@@ -216,7 +223,7 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
                             clean_name = child.name.replace("main.", "")
                             if clean_name not in layers:
                                 layers.append(clean_name)
-            except:
+            except Exception:
                 pass  # Fallback failed, continue with empty list
 
         logging.debug(f"[STAGE] GPKG {gpkg_path.name} layers: {layers}")
@@ -237,6 +244,17 @@ def import_shapefile(shp_path: Path, out_fc: str) -> bool:
         return True
     except Exception as e:
         logging.error(f"[STAGE] Shapefile import failed: {e}")
+        return False
+
+def import_geojson(geojson_path: Path, out_fc: str) -> bool:
+    """Import GeoJSON via ArcPy JSONToFeatures. Handles CRS if present."""
+    try:
+        # ArcPy JSONToFeatures expects Esri JSON. However, since ArcGIS Pro 2.9+, it accepts GeoJSON too.
+        # Use JSONToFeatures directly; Pro 3.3 environment (per docs) supports GeoJSON.
+        arcpy.conversion.JSONToFeatures(str(geojson_path), out_fc)
+        return True
+    except Exception as e:
+        logging.error(f"[STAGE] GeoJSON import failed: {e}")
         return False
 
 def import_zip(zip_path: Path, out_fc: str) -> bool:
@@ -281,7 +299,7 @@ def import_zip(zip_path: Path, out_fc: str) -> bool:
         if extract_dir.exists():
             try:
                 shutil.rmtree(extract_dir)
-            except:
+            except Exception:
                 pass  # Best effort cleanup
 
 def ensure_gdb_exists(gdb_path: str) -> None:

@@ -6,6 +6,7 @@ Supports bbox filtering and include-based collection selection.
 import logging
 import json
 from pathlib import Path
+import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -51,6 +52,7 @@ def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[str
 def run(cfg: dict) -> None:
     """Process all OGC sources in configuration."""
     global_bbox, global_crs = _extract_global_bbox(cfg)
+    delay_seconds = float(cfg.get("ogc_api_delay", 0.1) or 0)
     ogc_sources = []
     for source in cfg.get("sources", []):
         if source.get("type") == "ogc" and source.get("enabled", True):
@@ -70,7 +72,7 @@ def run(cfg: dict) -> None:
     for source in ogc_sources:
         try:
             log.info(f"[OGC] Processing {source['name']}")
-            process_ogc_source(source, downloads_dir, global_bbox, global_crs)
+            process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
         except Exception as e:
             log.error(f"[OGC] Failed {source['name']}: {e}")
 
@@ -84,7 +86,8 @@ def normalize_base_url(url: str) -> str:
 
 
 def process_ogc_source(source: Dict, downloads_dir: Path,
-                       global_bbox: Optional[List[float]], global_crs: Optional[str]) -> bool:
+                       global_bbox: Optional[List[float]], global_crs: Optional[str],
+                       delay_seconds: float) -> bool:
     base_url = normalize_base_url(source["url"])
     authority = source["authority"]
     name = source["name"]
@@ -119,7 +122,15 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
     total_features = 0
     for cid in selected_ids:
         try:
-            cnt = fetch_collection_items(base_url, cid, out_dir / cid, raw, global_bbox, global_crs)
+            cnt = fetch_collection_items(
+                base_url,
+                cid,
+                out_dir,
+                raw,
+                global_bbox,
+                global_crs,
+                delay_seconds,
+            )
             total_features += cnt
             log.info(f"[OGC] Collection {cid}: {cnt} features")
         except Exception as e:
@@ -133,7 +144,8 @@ def discover_collections(base_url: str) -> List[Dict]:
     try:
         url = urljoin(base_url + "/", "collections")
         params = {"f": "json"}
-        r = requests.get(url, params=params, timeout=60)
+        headers = {"Accept": "application/json"}
+        r = requests.get(url, params=params, timeout=60, headers=headers)
         r.raise_for_status()
         data = r.json()
         cols = data.get("collections", [])
@@ -151,40 +163,64 @@ def discover_collections(base_url: str) -> List[Dict]:
 
 
 def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw: Dict,
-                           global_bbox: Optional[List[float]], global_crs: Optional[str]) -> int:
+                           global_bbox: Optional[List[float]], global_crs: Optional[str],
+                           delay_seconds: float) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     url = urljoin(base_url.rstrip("/") + "/", f"collections/{collection_id}/items")
+    page_size = int(raw.get("page_size", 1000) or 1000)
     params = {
-        "limit": 1000,
-        "f": "json",
+        "limit": page_size,
+        # Prefer explicit OGC Features JSON representation
+        "f": "application/vnd.ogc.fg+json",
+    }
+
+    headers = {
+        # Ask for GeoJSON/Features JSON; many services honor Accept first
+        "Accept": "application/geo+json, application/vnd.ogc.fg+json, application/json;q=0.9",
     }
 
     bbox = raw.get("bbox") or global_bbox
     if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox[:4])
         sr = raw.get("bbox_sr") or raw.get("bbox-crs") or global_crs
-        if sr:
-            if isinstance(sr, int) or (isinstance(sr, str) and str(sr).isdigit()):
-                params["bbox-crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{int(sr)}"
-            else:
-                params["bbox-crs"] = str(sr)
+        supports_bbox_crs = bool(raw.get("supports_bbox_crs", True))
+        if sr and supports_bbox_crs:
+            sr_str = str(sr)
+            sr_upper = sr_str.upper()
+            is_epsg_int = isinstance(sr, int) or (isinstance(sr, str) and sr_str.isdigit())
+
+            # Only send bbox-crs when not using default CRS84
+            is_crs84_token = sr_upper == "CRS84"
+            is_crs84_uri = sr_upper in (
+                "HTTP://WWW.OPENGIS.NET/DEF/CRS/OGC/1.3/CRS84",
+                "HTTPS://WWW.OPENGIS.NET/DEF/CRS/OGC/1.3/CRS84",
+            )
+            if not (is_crs84_token or is_crs84_uri):
+                if is_epsg_int:
+                    params["bbox-crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{int(sr)}"
+                else:
+                    params["bbox-crs"] = sr_str
 
     total = 0
     page = 1
+    all_features: List[Dict] = []
     next_url: Optional[str] = url
     next_params = params.copy()
 
     while next_url:
-        r = requests.get(next_url, params=next_params if next_url == url else None, timeout=120)
+        r = requests.get(
+            next_url,
+            params=next_params if next_url == url else None,
+            timeout=120,
+            headers=headers,
+        )
         r.raise_for_status()
         data = r.json()
 
         features = data.get("features", [])
         if features:
-            out_file = out_dir / f"part_{page:03d}.geojson"
-            with open(out_file, "w", encoding="utf-8") as f:
-                json.dump({"type": "FeatureCollection", "features": features}, f, ensure_ascii=False, separators=(",", ":"))
+            all_features.extend(features)
             total += len(features)
             page += 1
 
@@ -201,6 +237,14 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
             log.warning("[OGC] Pagination exceeded 1000 pages, stopping.")
             break
 
+        # Respect configured inter-request delay to be gentle on APIs
+        if delay_seconds and delay_seconds > 0:
+            time.sleep(delay_seconds)
+
+    # Write a single merged file per collection
+    out_file = out_dir / f"{collection_id}.geojson"
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
     return total
 
 

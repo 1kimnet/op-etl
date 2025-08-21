@@ -7,7 +7,7 @@ sources:
   authority: FM
   type: file
   url: https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
-  enabled: false
+  enabled: true
 
 #-----------------------------------------------------#
 #                NVV - Naturvårdsverket               #
@@ -17,7 +17,7 @@ sources:
   authority: NVV
   type: file
   url: https://geodata.naturvardsverket.se/nedladdning/naturvardsregistret/
-  enabled: false
+  enabled: true
   raw:
     layer_name:
     - Biosfarsomraden
@@ -62,8 +62,9 @@ sources:
 - name: Potentiellt förorenade områden
   authority: LST
   type: file
-  url: https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
-  enabled: false
+  url:
+    https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
+  enabled: true
 - name: Riksintressen
   authority: LST
   type: rest
@@ -102,7 +103,8 @@ sources:
 - name: LstD Ett rikt odlingslandskap
   authority: LSTD
   type: rest
-  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
+  url:
+    https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
   enabled: true
   raw:
     format: geojson
@@ -142,7 +144,8 @@ sources:
 - name: LstD Levande sjöar och vattendrag
   authority: LSTD
   type: rest
-  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
+  url:
+    https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
   enabled: true
   raw:
     format: geojson
@@ -248,7 +251,7 @@ sources:
   authority: MSB
   type: file
   url: https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------------------#
 #                RAA - Riksantikvarieämbetet              #
@@ -264,7 +267,7 @@ sources:
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnader_kulthist_inv/byggnader_sverige.gpkg
   out_name: byggnader_sverige
-  enabled: false
+  enabled: true
   raw:
     layer_name: byggnader_sverige_point
 - name: Enskilda och statliga byggnadsminnen, skyddsområden
@@ -272,7 +275,7 @@ sources:
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnadsminne_skyddsomr/skyddsomrade_byggnadsminne_sverige.gpkg
   out_name: skyddsomrade_byggnadsminne_sverige
-  enabled: false
+  enabled: true
   raw:
     layer_name: skyddsomrade_byggnadsminne_sverige_polygon
 - name: Kulturhistoriska lämningar, Södermanland
@@ -280,7 +283,7 @@ sources:
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/lamningar/lan/l%C3%A4mningar_l%C3%A4n_s%C3%B6dermanland.gpkg
   out_name: lämningar_län_södermanland
-  enabled: false
+  enabled: true
   raw:
     layer_name: lämningar_län_södermanland_point
 - name: RAA Världsarv i Sverige
@@ -288,7 +291,7 @@ sources:
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/varldsarv/varldsarv_sverige.gpkg
   out_name: varldsarv_sverige
-  enabled: false
+  enabled: true
   raw:
     layer_name: varldsarv_sverige_polygon
 
@@ -300,7 +303,7 @@ sources:
   authority: SGI
   type: file
   url: https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------------------------#
 #                SGU - Sveriges geologiska undersökning         #
@@ -365,14 +368,16 @@ sources:
 - name: Jordbruksskiften (senaste året)
   authority: SJV
   type: wfs
-  url: https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json
+  url:
+    https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json
   enabled: true
   raw:
     format: geojson
 - name: Produktionsplatser för djurhållning
   authority: SJV
   type: wfs
-  url: http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json
+  url:
+    http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json
   enabled: true
   raw:
     format: geojson
@@ -395,7 +400,7 @@ sources:
   authority: SKS
   type: file
   url: https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip
-  enabled: false
+  enabled: true
   download_format: zip
 - name: Ras och skred
   authority: SKS
@@ -474,7 +479,7 @@ sources:
   authority: SVK
   type: file
   url: https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip
-  enabled: false
+  enabled: true
 
 #---------------------------------------------#
 #                TRV - Trafikverket           #
