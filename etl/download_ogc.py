@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
+from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +71,18 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in ogc_sources:
+        metric = start_monitoring_source(source['name'], source['authority'], 'ogc')
+        
         try:
             log.info(f"[OGC] Processing {source['name']}")
-            process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
+            success = process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
+            end_monitoring_source(success, features=0)  # Features counted in process_ogc_source
+        except RecursionError as e:
+            log.error(f"[OGC] Recursion error in {source['name']}: {e}")
+            end_monitoring_source(False, 'RecursionError', str(e))
         except Exception as e:
             log.error(f"[OGC] Failed {source['name']}: {e}")
+            end_monitoring_source(False, type(e).__name__, str(e))
 
 
 def normalize_base_url(url: str) -> str:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
+from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -67,11 +68,18 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in rest_sources:
+        metric = start_monitoring_source(source['name'], source['authority'], 'rest')
+        
         try:
             log.info(f"[REST] Processing {source['name']}")
-            process_rest_source(source, downloads_dir, global_bbox, global_sr)
+            success = process_rest_source(source, downloads_dir, global_bbox, global_sr)
+            end_monitoring_source(success, features=0)  # Features counted in process_rest_source
+        except RecursionError as e:
+            log.error(f"[REST] Recursion error in {source['name']}: {e}")
+            end_monitoring_source(False, 'RecursionError', str(e))
         except Exception as e:
             log.error(f"[REST] Failed {source['name']}: {e}")
+            end_monitoring_source(False, type(e).__name__, str(e))
 
 
 def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:

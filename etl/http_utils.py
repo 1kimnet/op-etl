@@ -152,14 +152,17 @@ def safe_xml_parse(content: Union[str, bytes], max_elements: int = MAX_XML_ELEME
         
         try:
             # Use iterparse to limit elements processed
+            from io import BytesIO
             element_count = 0
-            for event, elem in ET.iterparse(content, events=('start',)):
+            
+            # First pass: count elements
+            for event, elem in ET.iterparse(BytesIO(content), events=('start',)):
                 element_count += 1
                 if element_count > max_elements:
                     log.warning(f"[XML] Too many elements: > {max_elements}")
                     return None
             
-            # Reset and parse normally if within limits
+            # Second pass: parse normally if within limits
             root = ET.fromstring(content)
             return root
             

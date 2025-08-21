@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, List, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, safe_xml_parse, validate_response_content
+from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -64,11 +65,18 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in wfs_sources:
+        metric = start_monitoring_source(source['name'], source['authority'], 'wfs')
+        
         try:
             log.info(f"[WFS] Processing {source['name']}")
-            process_wfs_source(source, downloads_dir, global_bbox, global_sr)
+            success = process_wfs_source(source, downloads_dir, global_bbox, global_sr)
+            end_monitoring_source(success, files=1 if success else 0)
+        except RecursionError as e:
+            log.error(f"[WFS] Recursion error in {source['name']}: {e}")
+            end_monitoring_source(False, 'RecursionError', str(e))
         except Exception as e:
             log.error(f"[WFS] Failed {source['name']}: {e}")
+            end_monitoring_source(False, type(e).__name__, str(e))
 
 
 def process_wfs_source(source: Dict, downloads_dir: Path,

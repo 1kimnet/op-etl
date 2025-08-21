@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict
 
 from .http_utils import RecursionSafeSession, safe_xml_parse, download_with_retries, validate_response_content
+from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +33,18 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in atom_sources:
+        metric = start_monitoring_source(source['name'], source['authority'], 'atom')
+        
         try:
             log.info(f"Processing ATOM source: {source['name']}")
-            process_atom_source(source, downloads_dir)
+            success = process_atom_source(source, downloads_dir)
+            end_monitoring_source(success, files=1 if success else 0)
+        except RecursionError as e:
+            log.error(f"[ATOM] Recursion error in {source['name']}: {e}")
+            end_monitoring_source(False, 'RecursionError', str(e))
         except Exception as e:
             log.error(f"[ATOM] Failed {source['name']}: {e}")
+            end_monitoring_source(False, type(e).__name__, str(e))
 
 
 def process_atom_source(source: Dict, downloads_dir: Path) -> bool:
