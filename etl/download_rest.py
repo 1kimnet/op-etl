@@ -72,8 +72,8 @@ def run(cfg: dict) -> None:
         
         try:
             log.info(f"[REST] Processing {source['name']}")
-            success = process_rest_source(source, downloads_dir, global_bbox, global_sr)
-            end_monitoring_source(success, features=0)  # Features counted in process_rest_source
+            success, feature_count = process_rest_source(source, downloads_dir, global_bbox, global_sr)
+            end_monitoring_source(success, features=feature_count)  # Features counted in process_rest_source
         except RecursionError as e:
             log.error(f"[REST] Recursion error in {source['name']}: {e}")
             end_monitoring_source(False, 'RecursionError', str(e))
@@ -82,7 +82,7 @@ def run(cfg: dict) -> None:
             end_monitoring_source(False, type(e).__name__, str(e))
 
 
-def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
+def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional[List[float]], global_sr: Optional[int]) -> Tuple[bool, int]:
     """Process a single REST API source."""
     base_url = source["url"].rstrip("/")
     authority = source["authority"]
@@ -117,7 +117,7 @@ def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional
             log.warning(f"[REST] Failed to download layer {layer_id}: {e}")
 
     log.info(f"[REST] Total features from {name}: {total_features}")
-    return total_features > 0
+    return total_features > 0, total_features
 
 
 def discover_layers(base_url: str, include: list | None = None) -> List[int]:
