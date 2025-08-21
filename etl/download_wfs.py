@@ -6,14 +6,44 @@ Fixed to avoid recursion issues.
 import logging
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, List, Tuple
 import requests
 
 log = logging.getLogger(__name__)
 
 
+def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int]]:
+    try:
+        if not cfg.get("use_bbox_filter", False):
+            return None, None
+        gb = cfg.get("global_bbox") or cfg.get("global_ogc_bbox") or {}
+        coords = gb.get("coords")
+        crs = gb.get("crs")
+        sr = None
+        if isinstance(crs, int):
+            sr = crs
+        elif isinstance(crs, str):
+            up = crs.upper()
+            if up in ("WGS84", "CRS84"):
+                sr = 4326
+            elif up.startswith("EPSG:"):
+                try:
+                    sr = int(up.split(":", 1)[1])
+                except Exception:
+                    sr = None
+            elif "/EPSG/" in up:
+                try:
+                    sr = int(up.rstrip("/").split("/")[-1])
+                except Exception:
+                    sr = None
+        return coords, sr
+    except Exception:
+        return None, None
+
+
 def run(cfg: dict) -> None:
     """Process all WFS sources."""
+    global_bbox, global_sr = _extract_global_bbox(cfg)
     # Extract sources cleanly
     wfs_sources = []
     for source in cfg.get("sources", []):
@@ -35,12 +65,13 @@ def run(cfg: dict) -> None:
     for source in wfs_sources:
         try:
             log.info(f"[WFS] Processing {source['name']}")
-            process_wfs_source(source, downloads_dir)
+            process_wfs_source(source, downloads_dir, global_bbox, global_sr)
         except Exception as e:
             log.error(f"[WFS] Failed {source['name']}: {e}")
 
 
-def process_wfs_source(source: Dict, downloads_dir: Path) -> bool:
+def process_wfs_source(source: Dict, downloads_dir: Path,
+                      global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
     """Process a single WFS source."""
     url = source["url"]
     authority = source["authority"]
@@ -57,7 +88,7 @@ def process_wfs_source(source: Dict, downloads_dir: Path) -> bool:
             return download_direct_wfs(url, out_dir, name)
         else:
             # WFS service URL
-            return download_wfs_service(url, source, out_dir, name)
+            return download_wfs_service(url, source, out_dir, name, global_bbox, global_sr)
 
     except Exception as e:
         log.error(f"[WFS] Error processing {name}: {e}")
@@ -95,7 +126,8 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
         return False
 
 
-def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str) -> bool:
+def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
+                         global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
     """Download from WFS service URL."""
     raw = source.get("raw", {})
 
@@ -120,10 +152,10 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str) -> bo
         }
 
         # Add bbox if configured
-        bbox = raw.get("bbox")
+        bbox = raw.get("bbox") or global_bbox
         if bbox and len(bbox) >= 4:
-            params["bbox"] = ",".join(str(v) for v in bbox)
-            bbox_sr = raw.get("bbox_sr", 4326)
+            params["bbox"] = ",".join(str(v) for v in bbox[:4])
+            bbox_sr = raw.get("bbox_sr") or global_sr or 4326
             params["srsName"] = f"EPSG:{bbox_sr}"
 
         response = requests.get(url, params=params, timeout=120)
