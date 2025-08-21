@@ -6,7 +6,8 @@ sources:
 - name: Försvarsmakten - Rikstäckande geodata
   authority: FM
   type: file
-  url: https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
+  url: 
+    https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
   enabled: true
 
 #-----------------------------------------------------#
@@ -62,7 +63,7 @@ sources:
 - name: Potentiellt förorenade områden
   authority: LST
   type: file
-  url:
+  url: 
     https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
   enabled: true
 - name: Riksintressen
@@ -103,7 +104,7 @@ sources:
 - name: LstD Ett rikt odlingslandskap
   authority: LSTD
   type: rest
-  url:
+  url: 
     https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
   enabled: true
   raw:
@@ -144,7 +145,7 @@ sources:
 - name: LstD Levande sjöar och vattendrag
   authority: LSTD
   type: rest
-  url:
+  url: 
     https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
   enabled: true
   raw:
@@ -368,7 +369,7 @@ sources:
 - name: Jordbruksskiften (senaste året)
   authority: SJV
   type: wfs
-  url:
+  url: 
     https://epub.sjv.se/inspire/inspire/wfs?service=WFS&request=GetFeature&typeName=inspire:senaste_arslager_skifte&outputFormat=application/json
   enabled: true
   raw:
@@ -376,7 +377,7 @@ sources:
 - name: Produktionsplatser för djurhållning
   authority: SJV
   type: wfs
-  url:
+  url: 
     http://epub.sjv.se/inspire/inspire/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=inspire:produktionsplatser&outputFormat=application/json
   enabled: true
   raw:

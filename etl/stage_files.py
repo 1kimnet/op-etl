@@ -89,10 +89,23 @@ def discover_files(directory: Path) -> list[Path]:
     return unique_files
 
 def create_safe_name(file_path: Path, authority: str) -> str:
-    """Create ArcPy-safe name from file and authority."""
-    # Combine authority and file stem for unique naming
-    base_name = f"{authority}_{file_path.stem}"
-    return make_arcpy_safe_name(base_name)
+    """Create ArcPy-safe name with single authority prefix.
+
+    Example: stem 'raa_raa_ri_kulturmiljovard_mb3kap6' with authority 'RAA'
+    becomes 'raa_ri_kulturmiljovard_mb3kap6'.
+    """
+    norm_auth = make_arcpy_safe_name(authority)
+    norm_stem = make_arcpy_safe_name(file_path.stem)
+
+    # Strip repeated leading authority tokens from stem
+    prefix = f"{norm_auth}_"
+    while norm_stem.startswith(prefix):
+        norm_stem = norm_stem[len(prefix):]
+
+    if not norm_stem:
+        norm_stem = "data"
+
+    return make_arcpy_safe_name(f"{norm_auth}_{norm_stem}")
 
 def make_arcpy_safe_name(name: str, max_length: int = 60) -> str:
     """Create bulletproof ArcPy-compatible feature class names."""

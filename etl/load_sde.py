@@ -30,13 +30,22 @@ def run(cfg):
 
     for fc_name in feature_classes:
         src_fc = f"{staging_gdb}/{fc_name}"
-        dest_fc = f"{sde_conn}/{fc_name}"
+
+        # Determine target feature dataset by authority prefix (before first underscore)
+        authority = fc_name.split('_', 1)[0].upper() if '_' in fc_name else None
+        dataset_name = f"Underlag_{authority}" if authority else None
+
+        # Strip the authority_ prefix from the destination feature class name
+        clean_fc_name = fc_name.split('_', 1)[1] if '_' in fc_name else fc_name
+
+        # Resolve destination path: prefer dataset if it exists or can be created
+        dest_fc = resolve_sde_destination(sde_conn, dataset_name, clean_fc_name, src_fc)
 
         try:
             if not arcpy.Exists(src_fc):
                 continue
 
-            success = load_to_sde(src_fc, dest_fc, fc_name)
+            success = load_to_sde(src_fc, dest_fc, clean_fc_name)
             if success:
                 loaded_count += 1
                 logging.info(f"[LOAD] ✓ {fc_name}")
@@ -91,3 +100,32 @@ def create_sde_fc(template_fc: str, dest_fc: str):
     except Exception as e:
         logging.error(f"[LOAD] Failed to create SDE feature class: {e}")
         raise
+
+def resolve_sde_destination(sde_conn: str, dataset_name: str | None, fc_name: str, template_fc: str) -> str:
+    """Return destination FC path under SDE, inside feature dataset if available.
+
+    Attempts to create missing dataset using template spatial reference if needed.
+    Fallbacks to SDE root on failure.
+    """
+    try:
+        if dataset_name:
+            dataset_path = f"{sde_conn}/{dataset_name}"
+            if not arcpy.Exists(dataset_path):
+                # Try to create feature dataset with same SR as template
+                try:
+                    sr = arcpy.Describe(template_fc).spatialReference
+                    arcpy.management.CreateFeatureDataset(sde_conn, dataset_name, sr)
+                except Exception as e:
+                    # If creation fails, log and fallback to root
+                    logging.warning(f"[LOAD] Could not create dataset {dataset_name}: {e}")
+                    return f"{sde_conn}/{fc_name}"
+
+            # If dataset exists now, place FC inside it
+            return f"{sde_conn}/{dataset_name}/{fc_name}"
+
+        # No dataset name determined
+        return f"{sde_conn}/{fc_name}"
+
+    except Exception as e:
+        logging.warning(f"[LOAD] Dataset resolution failed, loading to root: {e}")
+        return f"{sde_conn}/{fc_name}"
