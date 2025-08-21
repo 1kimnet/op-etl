@@ -1,13 +1,14 @@
 """
 WFS downloader for OP-ETL pipeline.
-Fixed to avoid recursion issues.
+Enhanced implementation with recursion depth protection.
 """
 
 import logging
 import json
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
-import requests
+
+from .http_utils import RecursionSafeSession, safe_json_parse, safe_xml_parse, validate_response_content
 
 log = logging.getLogger(__name__)
 
@@ -96,31 +97,52 @@ def process_wfs_source(source: Dict, downloads_dir: Path,
 
 
 def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
-    """Download from direct GetFeature URL."""
+    """Download from direct GetFeature URL with enhanced error handling."""
+    session = RecursionSafeSession()
+    
     try:
         # Ensure GeoJSON output
         if "outputFormat=" not in url:
             separator = "&" if "?" in url else "?"
             url = f"{url}{separator}outputFormat=application/json"
 
-        response = requests.get(url, timeout=120)
-        response.raise_for_status()
+        log.info(f"[WFS] Downloading direct WFS: {url}")
+        
+        response = session.safe_get(url, timeout=120)
+        if not response:
+            log.error(f"[WFS] Failed to fetch {url}")
+            return False
+        
+        if not validate_response_content(response):
+            log.error(f"[WFS] Invalid response content from {url}")
+            return False
 
         # Save response
         try:
-            data = response.json()
-            out_file = out_dir / f"{name}.geojson"
-            with open(out_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
-            log.info(f"[WFS] Saved {name} as GeoJSON")
-        except json.JSONDecodeError:
-            # Save as GML
-            out_file = out_dir / f"{name}.gml"
-            out_file.write_text(response.text, encoding='utf-8')
-            log.info(f"[WFS] Saved {name} as GML")
+            data = safe_json_parse(response.content)
+            if data:
+                out_file = out_dir / f"{name}.geojson"
+                with open(out_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+                log.info(f"[WFS] Saved {name} as GeoJSON")
+                return True
+            else:
+                # Try XML parsing if JSON failed
+                root = safe_xml_parse(response.content)
+                if root:
+                    out_file = out_dir / f"{name}.gml"
+                    out_file.write_text(response.text, encoding='utf-8')
+                    log.info(f"[WFS] Saved {name} as GML")
+                    return True
+        except Exception as e:
+            log.error(f"[WFS] Failed to save response: {e}")
+            return False
 
-        return True
+        return False
 
+    except RecursionError as e:
+        log.error(f"[WFS] Recursion error downloading: {e}")
+        return False
     except Exception as e:
         log.error(f"[WFS] Download failed: {e}")
         return False
@@ -128,7 +150,8 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
 
 def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
                          global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
-    """Download from WFS service URL."""
+    """Download from WFS service URL with enhanced error handling."""
+    session = RecursionSafeSession()
     raw = source.get("raw", {})
 
     # Extract typename from raw config
@@ -142,6 +165,8 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
             return False
 
     try:
+        log.info(f"[WFS] Downloading WFS service: {typename}")
+        
         # Build GetFeature request
         params = {
             "service": "WFS",
@@ -158,23 +183,41 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
             bbox_sr = raw.get("bbox_sr") or global_sr or 4326
             params["srsName"] = f"EPSG:{bbox_sr}"
 
-        response = requests.get(url, params=params, timeout=120)
-        response.raise_for_status()
+        response = session.safe_get(url, params=params, timeout=120)
+        if not response:
+            log.error(f"[WFS] Failed to fetch WFS service: {url}")
+            return False
+        
+        if not validate_response_content(response):
+            log.error(f"[WFS] Invalid response content from WFS service: {url}")
+            return False
 
         # Save response
         try:
-            data = response.json()
-            out_file = out_dir / f"{name}.geojson"
-            with open(out_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
-            log.info(f"[WFS] Saved {typename} as GeoJSON")
-        except json.JSONDecodeError:
-            out_file = out_dir / f"{name}.gml"
-            out_file.write_text(response.text, encoding='utf-8')
-            log.info(f"[WFS] Saved {typename} as GML")
+            data = safe_json_parse(response.content)
+            if data:
+                out_file = out_dir / f"{name}.geojson"
+                with open(out_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+                log.info(f"[WFS] Saved {typename} as GeoJSON")
+                return True
+            else:
+                # Try XML parsing if JSON failed  
+                root = safe_xml_parse(response.content)
+                if root:
+                    out_file = out_dir / f"{name}.gml"
+                    out_file.write_text(response.text, encoding='utf-8')
+                    log.info(f"[WFS] Saved {typename} as GML")
+                    return True
+        except Exception as e:
+            log.error(f"[WFS] Failed to save response: {e}")
+            return False
 
-        return True
+        return False
 
+    except RecursionError as e:
+        log.error(f"[WFS] Recursion error requesting service: {e}")
+        return False
     except Exception as e:
         log.error(f"[WFS] Service request failed: {e}")
         return False

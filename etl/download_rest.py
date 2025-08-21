@@ -1,13 +1,14 @@
 """
 REST API downloader for OP-ETL pipeline.
-Fixed to avoid recursion issues.
+Enhanced implementation with recursion depth protection.
 """
 
 import logging
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import requests
+
+from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 
 log = logging.getLogger(__name__)
 
@@ -112,19 +113,34 @@ def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional
 
 
 def discover_layers(base_url: str, include: list | None = None) -> List[int]:
-    """Discover available layers in the service."""
+    """Discover available layers in the service with enhanced error handling."""
+    session = RecursionSafeSession()
+    
     try:
+        log.info(f"[REST] Discovering layers: {base_url}")
+        
         # Query service info
         params = {"f": "json"}
-        response = requests.get(base_url, params=params, timeout=30)
-        response.raise_for_status()
+        response = session.safe_get(base_url, params=params, timeout=30)
+        
+        if not response:
+            log.warning(f"[REST] Failed to get service info from {base_url}")
+            return []
+        
+        if not validate_response_content(response):
+            log.warning(f"[REST] Invalid response content from {base_url}")
+            return []
 
-        data = response.json()
+        data = safe_json_parse(response.content)
+        if not data:
+            log.warning(f"[REST] Failed to parse service info from {base_url}")
+            return []
 
         # Extract layer IDs, optionally filtered by include patterns (matching layer name)
         layer_ids = []
         layers = data.get("layers", [])
         patterns = [p.lower() for p in include] if include else None
+        
         import fnmatch
         for layer in layers:
             if isinstance(layer, dict) and "id" in layer:
@@ -133,9 +149,13 @@ def discover_layers(base_url: str, include: list | None = None) -> List[int]:
                     if not any(fnmatch.fnmatchcase(lname, p) for p in patterns):
                         continue
                 layer_ids.append(layer["id"])
-
+        
+        log.info(f"[REST] Discovered {len(layer_ids)} layers")
         return layer_ids
 
+    except RecursionError as e:
+        log.error(f"[REST] Recursion error discovering layers: {e}")
+        return []
     except Exception as e:
         log.warning(f"[REST] Failed to discover layers: {e}")
         return []
@@ -143,13 +163,28 @@ def discover_layers(base_url: str, include: list | None = None) -> List[int]:
 
 def download_layer(layer_url: str, out_dir: Path, layer_name: str, raw_config: Dict,
                    global_bbox: Optional[List[float]], global_sr: Optional[int]) -> int:
-    """Download all features from a REST layer."""
+    """Download all features from a REST layer with enhanced error handling."""
+    session = RecursionSafeSession()
+    
     try:
+        log.info(f"[REST] Downloading layer: {layer_url}")
+        
         # Get layer info first
         info_params = {"f": "json"}
-        info_response = requests.get(f"{layer_url}", params=info_params, timeout=30)
-        info_response.raise_for_status()
-        layer_info = info_response.json()
+        info_response = session.safe_get(f"{layer_url}", params=info_params, timeout=30)
+        
+        if not info_response:
+            log.warning(f"[REST] Failed to get layer info: {layer_url}")
+            return 0
+        
+        if not validate_response_content(info_response):
+            log.warning(f"[REST] Invalid layer info response: {layer_url}")
+            return 0
+            
+        layer_info = safe_json_parse(info_response.content)
+        if not layer_info:
+            log.warning(f"[REST] Failed to parse layer info: {layer_url}")
+            return 0
 
         # Check if layer supports queries
         if not layer_info.get("supportsQuery", True):
@@ -183,16 +218,28 @@ def download_layer(layer_url: str, out_dir: Path, layer_name: str, raw_config: D
             params["resultOffset"] = offset
 
             query_url = f"{layer_url}/query"
-            response = requests.get(query_url, params=params, timeout=60)
-            response.raise_for_status()
+            response = session.safe_get(query_url, params=params, timeout=60)
+            
+            if not response:
+                log.warning(f"[REST] Failed to query layer at offset {offset}")
+                break
+            
+            if not validate_response_content(response):
+                log.warning(f"[REST] Invalid query response at offset {offset}")
+                break
 
-            data = response.json()
+            data = safe_json_parse(response.content)
+            if not data:
+                log.warning(f"[REST] Failed to parse query response at offset {offset}")
+                break
+                
             features = data.get("features", [])
 
             if not features:
                 break
 
             all_features.extend(features)
+            log.debug(f"[REST] Downloaded {len(features)} features (offset {offset})")
 
             # Check if we got all features
             if len(features) < page_size:
@@ -220,6 +267,9 @@ def download_layer(layer_url: str, out_dir: Path, layer_name: str, raw_config: D
 
         return len(all_features)
 
+    except RecursionError as e:
+        log.error(f"[REST] Recursion error downloading layer: {e}")
+        return 0
     except Exception as e:
         log.error(f"[REST] Failed to download layer: {e}")
         return 0
