@@ -1,6 +1,6 @@
 """
 OGC API Features downloader for OP-ETL pipeline.
-Supports bbox filtering and include-based collection selection.
+Enhanced implementation with recursion depth protection.
 """
 
 import logging
@@ -10,7 +10,8 @@ import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
-import requests
+from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
+from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +71,18 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in ogc_sources:
+        metric = start_monitoring_source(source['name'], source['authority'], 'ogc')
+        
         try:
             log.info(f"[OGC] Processing {source['name']}")
-            process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
+            success, feature_count = process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
+            end_monitoring_source(success, features=feature_count)  # Features counted in process_ogc_source
+        except RecursionError as e:
+            log.error(f"[OGC] Recursion error in {source['name']}: {e}")
+            end_monitoring_source(False, 'RecursionError', str(e))
         except Exception as e:
             log.error(f"[OGC] Failed {source['name']}: {e}")
+            end_monitoring_source(False, type(e).__name__, str(e))
 
 
 def normalize_base_url(url: str) -> str:
@@ -87,7 +95,7 @@ def normalize_base_url(url: str) -> str:
 
 def process_ogc_source(source: Dict, downloads_dir: Path,
                        global_bbox: Optional[List[float]], global_crs: Optional[str],
-                       delay_seconds: float) -> bool:
+                       delay_seconds: float) -> Tuple[bool, int]:
     base_url = normalize_base_url(source["url"])
     authority = source["authority"]
     name = source["name"]
@@ -100,7 +108,7 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
     collections = discover_collections(base_url)
     if not collections:
         log.warning(f"[OGC] No collections discovered for {name}")
-        return False
+        return False, 0
 
     # Filter by explicit list or include patterns
     selected_ids: List[str] = []
@@ -137,17 +145,34 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
             log.warning(f"[OGC] Failed collection {cid}: {e}")
 
     log.info(f"[OGC] Total features from {name}: {total_features}")
-    return total_features > 0
+    return total_features > 0, total_features
 
 
 def discover_collections(base_url: str) -> List[Dict]:
+    """Discover collections from OGC API with enhanced error handling."""
+    session = RecursionSafeSession()
+    
     try:
         url = urljoin(base_url + "/", "collections")
         params = {"f": "json"}
         headers = {"Accept": "application/json"}
-        r = requests.get(url, params=params, timeout=60, headers=headers)
-        r.raise_for_status()
-        data = r.json()
+        
+        log.info(f"[OGC] Discovering collections: {url}")
+        
+        response = session.safe_get(url, params=params, headers=headers, timeout=60)
+        if not response:
+            log.error(f"[OGC] Failed to get collections from {url}")
+            return []
+        
+        if not validate_response_content(response):
+            log.error(f"[OGC] Invalid collections response from {url}")
+            return []
+        
+        data = safe_json_parse(response.content)
+        if not data:
+            log.error(f"[OGC] Failed to parse collections from {url}")
+            return []
+            
         cols = data.get("collections", [])
         results: List[Dict] = []
         for c in cols:
@@ -156,7 +181,13 @@ def discover_collections(base_url: str) -> List[Dict]:
                     "id": c.get("id"),
                     "title": c.get("title") or c.get("id"),
                 })
+        
+        log.info(f"[OGC] Discovered {len(results)} collections")
         return results
+        
+    except RecursionError as e:
+        log.error(f"[OGC] Recursion error discovering collections: {e}")
+        return []
     except Exception as e:
         log.error(f"[OGC] Discover collections failed: {e}")
         return []
@@ -165,7 +196,9 @@ def discover_collections(base_url: str) -> List[Dict]:
 def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw: Dict,
                            global_bbox: Optional[List[float]], global_crs: Optional[str],
                            delay_seconds: float) -> int:
+    """Fetch collection items with enhanced error handling."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    session = RecursionSafeSession()
 
     url = urljoin(base_url.rstrip("/") + "/", f"collections/{collection_id}/items")
     page_size = int(raw.get("page_size", 1000) or 1000)
@@ -208,44 +241,68 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     next_url: Optional[str] = url
     next_params = params.copy()
 
-    while next_url:
-        r = requests.get(
-            next_url,
-            params=next_params if next_url == url else None,
-            timeout=120,
-            headers=headers,
-        )
-        r.raise_for_status()
-        data = r.json()
+    try:
+        log.info(f"[OGC] Fetching collection items: {collection_id}")
+        
+        while next_url:
+            response = session.safe_get(
+                next_url,
+                params=next_params if next_url == url else None,
+                timeout=120,
+                headers=headers,
+            )
+            
+            if not response:
+                log.error(f"[OGC] Failed to fetch page {page} for {collection_id}")
+                break
+            
+            if not validate_response_content(response):
+                log.error(f"[OGC] Invalid response content for page {page} of {collection_id}")
+                break
+            
+            data = safe_json_parse(response.content)
+            if not data:
+                log.error(f"[OGC] Failed to parse response for page {page} of {collection_id}")
+                break
 
-        features = data.get("features", [])
-        if features:
-            all_features.extend(features)
-            total += len(features)
-            page += 1
+            features = data.get("features", [])
+            if features:
+                all_features.extend(features)
+                total += len(features)
+                log.debug(f"[OGC] Page {page}: {len(features)} features")
+                page += 1
 
-        # Find next link
-        next_link = _find_next_link(data.get("links", []))
-        next_url = next_link
-        next_params = None
+            # Find next link
+            next_link = _find_next_link(data.get("links", []))
+            next_url = next_link
+            next_params = None
 
-        if not next_url:
-            break
+            if not next_url:
+                break
 
-        # Safety guard
-        if page > 1000:
-            log.warning("[OGC] Pagination exceeded 1000 pages, stopping.")
-            break
+            # Safety guard
+            if page > 1000:
+                log.warning("[OGC] Pagination exceeded 1000 pages, stopping.")
+                break
 
-        # Respect configured inter-request delay to be gentle on APIs
-        if delay_seconds and delay_seconds > 0:
-            time.sleep(delay_seconds)
+            # Respect configured inter-request delay to be gentle on APIs
+            if delay_seconds and delay_seconds > 0:
+                time.sleep(delay_seconds)
 
-    # Write a single merged file per collection
-    out_file = out_dir / f"{collection_id}.geojson"
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
-    return total
+        # Write a single merged file per collection
+        out_file = out_dir / f"{collection_id}.geojson"
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
+        
+        log.info(f"[OGC] Saved {total} features to {out_file.name}")
+        return total
+        
+    except RecursionError as e:
+        log.error(f"[OGC] Recursion error fetching {collection_id}: {e}")
+        return 0
+    except Exception as e:
+        log.error(f"[OGC] Error fetching {collection_id}: {e}")
+        return 0
 
 
 def _find_next_link(links: List[Dict]) -> Optional[str]:

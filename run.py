@@ -1,5 +1,6 @@
 import argparse
 import logging
+import time
 from pathlib import Path
 from etl.config import load_config, ConfigError
 from etl.paths import ensure_workspaces
@@ -69,6 +70,21 @@ def main():
         logging.info("Starting staging process...")
         from etl.stage_files import stage_all_downloads
         stage_all_downloads(filtered_cfg)
+
+        # Log monitoring summary
+        from etl.monitoring import log_pipeline_summary, save_pipeline_metrics, get_error_patterns
+        log_pipeline_summary()
+        
+        # Save metrics to file
+        metrics_file = Path("logs") / f"pipeline_metrics_{Path().resolve().name}_{int(time.time())}.json"
+        save_pipeline_metrics(metrics_file)
+        
+        # Check for error patterns
+        patterns = get_error_patterns()
+        if patterns['recursion_errors']:
+            logging.warning(f"Detected recursion errors in: {patterns['recursion_errors']}")
+        if patterns['timeout_errors']:
+            logging.warning(f"Detected timeout errors in: {patterns['timeout_errors']}")
 
         logging.info("Download process finished.")
 
