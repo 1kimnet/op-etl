@@ -149,9 +149,9 @@ def process_rest_source(
     total_features = 0
 
     for layer in layer_info:
+        layer_id = layer["id"]
+        layer_name = layer["name"]
         try:
-            layer_id = layer["id"]
-            layer_name = layer["name"]
             sanitized_name = sanitize_layer_name(layer_name)
 
             layer_url = f"{base_url}/{layer_id}"
@@ -159,7 +159,7 @@ def process_rest_source(
             total_features += feature_count
             log.info(f"[REST] Layer {layer_id} ({layer_name}): {feature_count} features")
         except Exception as e:
-            log.warning(f"[REST] Failed to download layer {layer_id} ({layer.get('name', 'unknown')}): {e}")
+            log.warning(f"[REST] Failed to download layer {layer_id} ({layer_name}): {e}")
 
     log.info(f"[REST] Total features from {name}: {total_features}")
     return total_features > 0, total_features
