@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 MAX_RESPONSE_SIZE_MB = 100
 MAX_JSON_DEPTH = 50
 MAX_XML_ELEMENTS = 50000
+MAX_JSON_ARRAY_SAMPLE_SIZE = 100
 DEFAULT_RECURSION_LIMIT = 3000
 DEFAULT_TIMEOUT = 60
 
@@ -240,7 +241,7 @@ def _json_depth(obj: Any, current_depth: int = 0) -> int:
     elif isinstance(obj, list):
         if not obj:
             return current_depth
-        return max(_json_depth(item, current_depth + 1) for item in obj[:100])  # Limit check to first 100 items
+        return max(_json_depth(item, current_depth + 1) for item in obj[:MAX_JSON_ARRAY_SAMPLE_SIZE])  # Limit check to first MAX_JSON_ARRAY_SAMPLE_SIZE items
     else:
         return current_depth
 

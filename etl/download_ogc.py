@@ -75,8 +75,8 @@ def run(cfg: dict) -> None:
         
         try:
             log.info(f"[OGC] Processing {source['name']}")
-            success = process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
-            end_monitoring_source(success, features=0)  # Features counted in process_ogc_source
+            success, feature_count = process_ogc_source(source, downloads_dir, global_bbox, global_crs, delay_seconds)
+            end_monitoring_source(success, features=feature_count)  # Features counted in process_ogc_source
         except RecursionError as e:
             log.error(f"[OGC] Recursion error in {source['name']}: {e}")
             end_monitoring_source(False, 'RecursionError', str(e))
@@ -95,7 +95,7 @@ def normalize_base_url(url: str) -> str:
 
 def process_ogc_source(source: Dict, downloads_dir: Path,
                        global_bbox: Optional[List[float]], global_crs: Optional[str],
-                       delay_seconds: float) -> bool:
+                       delay_seconds: float) -> Tuple[bool, int]:
     base_url = normalize_base_url(source["url"])
     authority = source["authority"]
     name = source["name"]
@@ -108,7 +108,7 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
     collections = discover_collections(base_url)
     if not collections:
         log.warning(f"[OGC] No collections discovered for {name}")
-        return False
+        return False, 0
 
     # Filter by explicit list or include patterns
     selected_ids: List[str] = []
@@ -145,7 +145,7 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
             log.warning(f"[OGC] Failed collection {cid}: {e}")
 
     log.info(f"[OGC] Total features from {name}: {total_features}")
-    return total_features > 0
+    return total_features > 0, total_features
 
 
 def discover_collections(base_url: str) -> List[Dict]:

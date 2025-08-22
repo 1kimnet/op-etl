@@ -69,8 +69,8 @@ def run(cfg: dict) -> None:
         
         try:
             log.info(f"[WFS] Processing {source['name']}")
-            success = process_wfs_source(source, downloads_dir, global_bbox, global_sr)
-            end_monitoring_source(success, files=1 if success else 0)
+            success, file_count = process_wfs_source(source, downloads_dir, global_bbox, global_sr)
+            end_monitoring_source(success, files=file_count if success else 0)
         except RecursionError as e:
             log.error(f"[WFS] Recursion error in {source['name']}: {e}")
             end_monitoring_source(False, 'RecursionError', str(e))
@@ -80,7 +80,7 @@ def run(cfg: dict) -> None:
 
 
 def process_wfs_source(source: Dict, downloads_dir: Path,
-                      global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
+                      global_bbox: Optional[List[float]], global_sr: Optional[int]) -> Tuple[bool, int]:
     """Process a single WFS source."""
     url = source["url"]
     authority = source["authority"]
@@ -101,10 +101,10 @@ def process_wfs_source(source: Dict, downloads_dir: Path,
 
     except Exception as e:
         log.error(f"[WFS] Error processing {name}: {e}")
-        return False
+        return False, 0
 
 
-def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
+def download_direct_wfs(url: str, out_dir: Path, name: str) -> Tuple[bool, int]:
     """Download from direct GetFeature URL with enhanced error handling."""
     session = RecursionSafeSession()
     
@@ -119,11 +119,11 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
         response = session.safe_get(url, timeout=120)
         if not response:
             log.error(f"[WFS] Failed to fetch {url}")
-            return False
+            return False, 0
         
         if not validate_response_content(response):
             log.error(f"[WFS] Invalid response content from {url}")
-            return False
+            return False, 0
 
         # Save response
         try:
@@ -133,7 +133,7 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
                 with open(out_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False)
                 log.info(f"[WFS] Saved {name} as GeoJSON")
-                return True
+                return True, 1
             else:
                 # Try XML parsing if JSON failed
                 root = safe_xml_parse(response.content)
@@ -141,23 +141,23 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> bool:
                     out_file = out_dir / f"{name}.gml"
                     out_file.write_text(response.text, encoding='utf-8')
                     log.info(f"[WFS] Saved {name} as GML")
-                    return True
+                    return True, 1
         except Exception as e:
             log.error(f"[WFS] Failed to save response: {e}")
-            return False
+            return False, 0
 
-        return False
+        return False, 0
 
     except RecursionError as e:
         log.error(f"[WFS] Recursion error downloading: {e}")
-        return False
+        return False, 0
     except Exception as e:
         log.error(f"[WFS] Download failed: {e}")
-        return False
+        return False, 0
 
 
 def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
-                         global_bbox: Optional[List[float]], global_sr: Optional[int]) -> bool:
+                         global_bbox: Optional[List[float]], global_sr: Optional[int]) -> Tuple[bool, int]:
     """Download from WFS service URL with enhanced error handling."""
     session = RecursionSafeSession()
     raw = source.get("raw", {})
@@ -170,7 +170,7 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
             typename = url.split("typeName=")[1].split("&")[0]
         else:
             log.warning(f"[WFS] No typename specified for {name}")
-            return False
+            return False, 0
 
     try:
         log.info(f"[WFS] Downloading WFS service: {typename}")
@@ -194,11 +194,11 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
         response = session.safe_get(url, params=params, timeout=120)
         if not response:
             log.error(f"[WFS] Failed to fetch WFS service: {url}")
-            return False
+            return False, 0
         
         if not validate_response_content(response):
             log.error(f"[WFS] Invalid response content from WFS service: {url}")
-            return False
+            return False, 0
 
         # Save response
         try:
@@ -208,7 +208,7 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
                 with open(out_file, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False)
                 log.info(f"[WFS] Saved {typename} as GeoJSON")
-                return True
+                return True, 1
             else:
                 # Try XML parsing if JSON failed  
                 root = safe_xml_parse(response.content)
@@ -216,16 +216,16 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
                     out_file = out_dir / f"{name}.gml"
                     out_file.write_text(response.text, encoding='utf-8')
                     log.info(f"[WFS] Saved {typename} as GML")
-                    return True
+                    return True, 1
         except Exception as e:
             log.error(f"[WFS] Failed to save response: {e}")
-            return False
+            return False, 0
 
-        return False
+        return False, 0
 
     except RecursionError as e:
         log.error(f"[WFS] Recursion error requesting service: {e}")
-        return False
+        return False, 0
     except Exception as e:
         log.error(f"[WFS] Service request failed: {e}")
-        return False
+        return False, 0
