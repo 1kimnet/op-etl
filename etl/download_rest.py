@@ -82,6 +82,39 @@ def run(cfg: dict) -> None:
             end_monitoring_source(False, type(e).__name__, str(e))
 
 
+def sanitize_layer_name(name: str) -> str:
+    """Sanitize layer name for use as filename.
+    
+    Args:
+        name: Raw layer name from service metadata
+        
+    Returns:
+        Safe filename without extension
+    """
+    if not name:
+        return "unnamed_layer"
+    
+    # Basic cleanup for file system compatibility
+    # Replace invalid file system characters
+    safe_name = name.replace('/', '_').replace('\\', '_').replace(':', '_')
+    safe_name = safe_name.replace('<', '_').replace('>', '_').replace('|', '_')
+    safe_name = safe_name.replace('"', '_').replace('?', '_').replace('*', '_')
+    
+    # Replace spaces with underscores and collapse multiple underscores
+    safe_name = safe_name.replace(' ', '_')
+    import re
+    safe_name = re.sub(r'_+', '_', safe_name)
+    
+    # Remove leading/trailing underscores
+    safe_name = safe_name.strip('_')
+    
+    # Ensure we have something
+    if not safe_name:
+        return "unnamed_layer"
+    
+    return safe_name
+
+
 def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional[List[float]], global_sr: Optional[int]) -> Tuple[bool, int]:
     """Process a single REST API source."""
     base_url = source["url"].rstrip("/")
@@ -93,35 +126,54 @@ def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional
     out_dir = downloads_dir / authority / name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Get layer IDs from config
+    # Get layer info from config or discover
     layer_ids = raw.get("layer_ids", [])
+    layers_to_process = []
 
-    # If no layer IDs specified, discover them (respect optional include patterns)
-    if not layer_ids:
+    if layer_ids:
+        # Convert legacy layer_ids config to new format
+        for layer_id in layer_ids:
+            layers_to_process.append({
+                "id": layer_id,
+                "name": f"layer_{layer_id}"  # Fallback name for manual config
+            })
+    else:
+        # Discover layers from service metadata
         raw_include = raw.get("include") or raw.get("includes")
         include_patterns = raw_include if isinstance(raw_include, list) else None
-        layer_ids = discover_layers(base_url, include_patterns)
-        if not layer_ids:
-            # Try with just layer 0
-            layer_ids = [0]
+        discovered_layers = discover_layers(base_url, include_patterns)
+        
+        if discovered_layers:
+            layers_to_process = discovered_layers
+        else:
+            # Fallback to layer 0 if discovery fails
+            layers_to_process = [{"id": 0, "name": "layer_0"}]
 
     total_features = 0
 
-    for layer_id in layer_ids:
+    for layer_info in layers_to_process:
         try:
+            layer_id = layer_info["id"]
+            layer_name = layer_info["name"]
+            safe_name = sanitize_layer_name(layer_name)
+            
             layer_url = f"{base_url}/{layer_id}"
-            feature_count = download_layer(layer_url, out_dir, f"layer_{layer_id}", raw, global_bbox, global_sr)
+            feature_count = download_layer(layer_url, out_dir, safe_name, raw, global_bbox, global_sr)
             total_features += feature_count
-            log.info(f"[REST] Layer {layer_id}: {feature_count} features")
+            log.info(f"[REST] + {safe_name}.geojson -> {authority.lower()}_{safe_name}")
         except Exception as e:
-            log.warning(f"[REST] Failed to download layer {layer_id}: {e}")
+            log.warning(f"[REST] Failed to download layer {layer_info}: {e}")
 
     log.info(f"[REST] Total features from {name}: {total_features}")
     return total_features > 0, total_features
 
 
-def discover_layers(base_url: str, include: list | None = None) -> List[int]:
-    """Discover available layers in the service with enhanced error handling."""
+def discover_layers(base_url: str, include: list | None = None) -> List[Dict]:
+    """Discover available layers in the service with enhanced error handling.
+    
+    Returns:
+        List of dictionaries with 'id' and 'name' keys for each layer.
+    """
     session = RecursionSafeSession()
     
     try:
@@ -144,22 +196,28 @@ def discover_layers(base_url: str, include: list | None = None) -> List[int]:
             log.warning(f"[REST] Failed to parse service info from {base_url}")
             return []
 
-        # Extract layer IDs, optionally filtered by include patterns (matching layer name)
-        layer_ids = []
+        # Extract layer info with both ID and name, optionally filtered by include patterns
+        discovered_layers = []
         layers = data.get("layers", [])
         patterns = [p.lower() for p in include] if include else None
         
         import fnmatch
         for layer in layers:
             if isinstance(layer, dict) and "id" in layer:
+                layer_name = layer.get("name", f"layer_{layer['id']}")
+                
                 if patterns:
-                    lname = str(layer.get("name", "")).lower()
+                    lname = str(layer_name).lower()
                     if not any(fnmatch.fnmatchcase(lname, p) for p in patterns):
                         continue
-                layer_ids.append(layer["id"])
+                
+                discovered_layers.append({
+                    "id": layer["id"],
+                    "name": layer_name
+                })
         
-        log.info(f"[REST] Discovered {len(layer_ids)} layers")
-        return layer_ids
+        log.info(f"[REST] Discovered {len(discovered_layers)} layers")
+        return discovered_layers
 
     except RecursionError as e:
         log.error(f"[REST] Recursion error discovering layers: {e}")
