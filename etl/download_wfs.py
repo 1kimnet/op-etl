@@ -3,13 +3,13 @@ WFS downloader for OP-ETL pipeline.
 Enhanced implementation with recursion depth protection.
 """
 
-import logging
 import json
+import logging
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from .http_utils import RecursionSafeSession, safe_json_parse, safe_xml_parse, validate_response_content
-from .monitoring import start_monitoring_source, end_monitoring_source
+from etl.http_utils import RecursionSafeSession, safe_json_parse, safe_xml_parse, validate_response_content
+from etl.monitoring import end_monitoring_source, start_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def run(cfg: dict) -> None:
 
     for source in wfs_sources:
         metric = start_monitoring_source(source['name'], source['authority'], 'wfs')
-        
+
         try:
             log.info(f"[WFS] Processing {source['name']}")
             success, file_count = process_wfs_source(source, downloads_dir, global_bbox, global_sr)
@@ -107,7 +107,7 @@ def process_wfs_source(source: Dict, downloads_dir: Path,
 def download_direct_wfs(url: str, out_dir: Path, name: str) -> Tuple[bool, int]:
     """Download from direct GetFeature URL with enhanced error handling."""
     session = RecursionSafeSession()
-    
+
     try:
         # Ensure GeoJSON output
         if "outputFormat=" not in url:
@@ -115,12 +115,12 @@ def download_direct_wfs(url: str, out_dir: Path, name: str) -> Tuple[bool, int]:
             url = f"{url}{separator}outputFormat=application/json"
 
         log.info(f"[WFS] Downloading direct WFS: {url}")
-        
+
         response = session.safe_get(url, timeout=120)
         if not response:
             log.error(f"[WFS] Failed to fetch {url}")
             return False, 0
-        
+
         if not validate_response_content(response):
             log.error(f"[WFS] Invalid response content from {url}")
             return False, 0
@@ -174,7 +174,7 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
 
     try:
         log.info(f"[WFS] Downloading WFS service: {typename}")
-        
+
         # Build GetFeature request
         params = {
             "service": "WFS",
@@ -195,7 +195,7 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
         if not response:
             log.error(f"[WFS] Failed to fetch WFS service: {url}")
             return False, 0
-        
+
         if not validate_response_content(response):
             log.error(f"[WFS] Invalid response content from WFS service: {url}")
             return False, 0
@@ -210,7 +210,7 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
                 log.info(f"[WFS] Saved {typename} as GeoJSON")
                 return True, 1
             else:
-                # Try XML parsing if JSON failed  
+                # Try XML parsing if JSON failed
                 root = safe_xml_parse(response.content)
                 if root:
                     out_file = out_dir / f"{name}.gml"

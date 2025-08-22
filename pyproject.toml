@@ -1,0 +1,91 @@
+# pyproject.toml - Enhanced configuration for ArcGIS Pro/Server consulting project
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "your-arcgis-project"
+version = "0.1.0"
+description = "ArcGIS Pro/Server consulting tools"
+authors = [{name = "Your Name", email = "your.email@domain.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pylint>=2.15.0",
+    "black>=22.0.0",
+    "pytest>=7.0.0",
+]
+
+# Ruff configuration (modern replacement for flake8 + other tools)
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # Line too long (let black handle this)
+    "E203",  # Whitespace before colon (conflicts with black)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Ignore unused imports in __init__.py
+
+# Black code formatter
+[tool.black]
+line-length = 120
+target-version = ["py39"]
+
+# Pylint configuration
+[tool.pylint.messages_control]
+ignored-modules = ["arcpy", "arcgis"]
+disable = [
+    "C0103",  # Invalid name
+    "C0301",  # Line too long
+    "R0903",  # Too few public methods
+    "R0913",  # Too many arguments
+    "W0613",  # Unused argument
+    "W0621",  # Redefined outer name
+]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.design]
+max-args = 8
+max-locals = 20
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning:arcpy.*",
+    "ignore::UserWarning:arcgis.*",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/venv/*",
+    "*/.arcgis/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
