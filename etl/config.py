@@ -35,14 +35,20 @@ def load_config(
     cfg = _read_yaml(config_path)
     src = _read_yaml(sources_path)
 
-    # Attach sources list (supports either top-level list or dict with key 'sources')
-    sources = src.get("sources") if isinstance(src, dict) else src
+    # Extract defaults and sources from sources.yaml
+    if isinstance(src, dict):
+        defaults = src.get("defaults", {})
+        sources = src.get("sources", [])
+    else:
+        defaults = {}
+        sources = src if isinstance(src, list) else []
+        
     if not isinstance(sources, list):
         raise ConfigError(
-            "sources.yaml must contain a top-level 'sources' list."
+            "sources.yaml must contain a top-level 'sources' list or dict with 'sources' key."
         )
 
-    # Process sources to ensure they have required fields
+    # Process sources to ensure they have required fields and inherit defaults
     processed_sources = []
     for i, source in enumerate(sources):
         processed_source = source.copy()
@@ -52,12 +58,19 @@ def load_config(
             name = processed_source.get("name", f"source_{i}")
             processed_source["out_name"] = slug(name)
 
+        # Apply bbox inheritance from defaults
+        _apply_bbox_inheritance(processed_source, defaults)
+
         processed_sources.append(processed_source)
 
     cfg["sources"] = processed_sources
 
     # Defaults to keep the rest of the pipeline sane
-    gp = cfg.setdefault("geoprocess", cfg.pop("geoprocessing", {}))
+    # Handle both "geoprocess" and "geoprocessing" keys (legacy support)
+    gp = cfg.setdefault("geoprocess", {})
+    if "geoprocessing" in cfg:
+        # Merge geoprocessing into geoprocess, giving precedence to geoprocessing
+        gp.update(cfg.pop("geoprocessing"))
     gp.setdefault("enabled", False)
 
     # Workspaces are required; provide a friendly error if missing
@@ -84,6 +97,19 @@ def load_config(
         val["strict_mode"] = val.pop("strict_modeQ")
 
     return cfg
+
+
+def _apply_bbox_inheritance(source: dict, defaults: dict) -> None:
+    """Apply bbox inheritance from defaults to source if not already specified."""
+    raw = source.setdefault("raw", {})
+    
+    # Inherit bbox if not specified in source
+    if "bbox" not in raw and "bbox" in defaults:
+        raw["bbox"] = defaults["bbox"]
+    
+    # Inherit bbox_sr if not specified in source
+    if "bbox_sr" not in raw and "bbox_sr" in defaults:
+        raw["bbox_sr"] = defaults["bbox_sr"]
 
 
 def normalize_sources(cfg: dict) -> list[dict]:
@@ -113,6 +139,8 @@ def normalize_sources(cfg: dict) -> list[dict]:
             r.setdefault("out_fields", "*")
             if "bbox" in r and isinstance(r["bbox"], str):
                 r["bbox"] = [float(x) for x in r["bbox"].split(",")]
+            # Ensure bbox_sr has a default
+            r.setdefault("bbox_sr", 4326)
 
         # normalize ogc_api details
         if t == "ogc_api":
@@ -120,6 +148,8 @@ def normalize_sources(cfg: dict) -> list[dict]:
             r.setdefault("collections", [])
             r.setdefault("page_size", 1000)
             r.setdefault("supports_bbox_crs", True)
+            # Ensure bbox_sr has a default for OGC
+            r.setdefault("bbox_sr", 4326)
 
         norm.append(out)
 
