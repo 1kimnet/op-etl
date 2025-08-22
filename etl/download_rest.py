@@ -21,7 +21,7 @@ def sanitize_layer_name(name: str) -> str:
         return "unknown_layer"
 
     # Replace problematic characters with safe alternatives
-    sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)  # Windows problematic chars
+    sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)  # Windows problematic chars: < > : " / \ | ? *
     sanitized = re.sub(r"[\x00-\x1f\x7f-\x9f]", "_", sanitized)  # Control chars
     sanitized = re.sub(r"\s+", "_", sanitized)  # Multiple spaces to single underscore
     sanitized = sanitized.strip("._")  # Remove leading/trailing dots and underscores
