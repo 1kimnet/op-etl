@@ -5,13 +5,36 @@ Enhanced implementation with recursion depth protection.
 
 import logging
 import json
+import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import start_monitoring_source, end_monitoring_source
 
 log = logging.getLogger(__name__)
+
+
+def sanitize_layer_name(name: str) -> str:
+    """Sanitize layer name to make it safe for use as a filename."""
+    if not name:
+        return "unknown_layer"
+    
+    # Replace problematic characters with safe alternatives
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)  # Windows problematic chars
+    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '_', sanitized)  # Control chars
+    sanitized = re.sub(r'\s+', '_', sanitized)  # Multiple spaces to single underscore
+    sanitized = sanitized.strip('._')  # Remove leading/trailing dots and underscores
+    
+    # Ensure it's not empty after sanitization
+    if not sanitized:
+        return "unknown_layer"
+    
+    # Limit length to avoid filesystem issues
+    if len(sanitized) > 200:
+        sanitized = sanitized[:200].rstrip('_')
+    
+    return sanitized
 
 
 def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int]]:
@@ -100,28 +123,50 @@ def process_rest_source(source: Dict, downloads_dir: Path, global_bbox: Optional
     if not layer_ids:
         raw_include = raw.get("include") or raw.get("includes")
         include_patterns = raw_include if isinstance(raw_include, list) else None
-        layer_ids = discover_layers(base_url, include_patterns)
-        if not layer_ids:
-            # Try with just layer 0
-            layer_ids = [0]
+        layer_info = discover_layers(base_url, include_patterns)
+        if not layer_info:
+            # Try with just layer 0 as fallback
+            layer_info = [{"id": 0, "name": "layer_0"}]
+    else:
+        # Convert configured layer IDs to layer info format
+        # We'll need to discover layer names for these IDs
+        layer_info = []
+        all_discovered = discover_layers(base_url)
+        discovered_by_id = {layer["id"]: layer for layer in all_discovered}
+        
+        for layer_id in layer_ids:
+            if layer_id in discovered_by_id:
+                layer_info.append(discovered_by_id[layer_id])
+            else:
+                # Layer ID not found in metadata, use fallback name
+                log.warning(f"[REST] Layer ID {layer_id} not found in service metadata, using fallback name")
+                layer_info.append({"id": layer_id, "name": f"layer_{layer_id}"})
 
     total_features = 0
 
-    for layer_id in layer_ids:
+    for layer in layer_info:
         try:
+            layer_id = layer["id"]
+            layer_name = layer["name"]
+            sanitized_name = sanitize_layer_name(layer_name)
+            
             layer_url = f"{base_url}/{layer_id}"
-            feature_count = download_layer(layer_url, out_dir, f"layer_{layer_id}", raw, global_bbox, global_sr)
+            feature_count = download_layer(layer_url, out_dir, sanitized_name, raw, global_bbox, global_sr)
             total_features += feature_count
-            log.info(f"[REST] Layer {layer_id}: {feature_count} features")
+            log.info(f"[REST] Layer {layer_id} ({layer_name}): {feature_count} features")
         except Exception as e:
-            log.warning(f"[REST] Failed to download layer {layer_id}: {e}")
+            log.warning(f"[REST] Failed to download layer {layer_id} ({layer.get('name', 'unknown')}): {e}")
 
     log.info(f"[REST] Total features from {name}: {total_features}")
     return total_features > 0, total_features
 
 
-def discover_layers(base_url: str, include: list | None = None) -> List[int]:
-    """Discover available layers in the service with enhanced error handling."""
+def discover_layers(base_url: str, include: list | None = None) -> List[Dict[str, Any]]:
+    """Discover available layers in the service with enhanced error handling.
+    
+    Returns:
+        List of dictionaries with 'id' and 'name' keys for each layer.
+    """
     session = RecursionSafeSession()
     
     try:
@@ -144,22 +189,33 @@ def discover_layers(base_url: str, include: list | None = None) -> List[int]:
             log.warning(f"[REST] Failed to parse service info from {base_url}")
             return []
 
-        # Extract layer IDs, optionally filtered by include patterns (matching layer name)
-        layer_ids = []
+        # Extract layer info with both ID and name, optionally filtered by include patterns
+        layer_info = []
         layers = data.get("layers", [])
         patterns = [p.lower() for p in include] if include else None
         
         import fnmatch
         for layer in layers:
             if isinstance(layer, dict) and "id" in layer:
+                layer_id = layer["id"]
+                layer_name = layer.get("name", f"layer_{layer_id}")
+                
                 if patterns:
-                    lname = str(layer.get("name", "")).lower()
+                    lname = str(layer_name).lower()
                     if not any(fnmatch.fnmatchcase(lname, p) for p in patterns):
                         continue
-                layer_ids.append(layer["id"])
+                
+                layer_info.append({"id": layer_id, "name": layer_name})
         
-        log.info(f"[REST] Discovered {len(layer_ids)} layers")
-        return layer_ids
+        # Handle single-layer FeatureServers
+        if not layer_info and data.get("type") == "Feature Layer":
+            log.info("[REST] Service appears to be a single-layer FeatureServer")
+            layer_id = data.get("id", 0)
+            layer_name = data.get("name", f"layer_{layer_id}")
+            layer_info.append({"id": layer_id, "name": layer_name})
+        
+        log.info(f"[REST] Discovered {len(layer_info)} layers")
+        return layer_info
 
     except RecursionError as e:
         log.error(f"[REST] Recursion error discovering layers: {e}")
