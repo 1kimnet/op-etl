@@ -1,3 +1,8 @@
+# Global defaults for bbox filtering (inherited by sources that don't specify their own)
+defaults:
+  bbox: [16.5008129, 59.0906713, 17.6220373, 59.6050281]  # Default Stockholm area in WGS84
+  bbox_sr: 4326
+
 sources:
 #---------------------------------------------------#
 #                FM - Försvarsmakten                #
@@ -50,11 +55,15 @@ sources:
   type: atom
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.LST_Miljoriskomrade.xml
   enabled: true
+  raw:
+    filter_services: true  # Enable bbox filtering for referenced services
 - name: 'Vindkraftskollen: Vindkraftverk'
   authority: LST
   type: atom
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_vindkraftverk.xml
   enabled: true
+  raw:
+    filter_services: true  # Enable bbox filtering for referenced services
 - name: 'Vindkraftskollen: Projekteringsområden'
   authority: LST
   type: atom

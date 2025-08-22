@@ -15,9 +15,18 @@ def run(cfg):
     aoi = gp.get("aoi_boundary")
     target_wkid = gp.get("target_wkid") or gp.get("target_srid")
 
+    # Validate AOI boundary exists if configured
+    if aoi and not arcpy.Exists(aoi):
+        logging.warning(f"[PROCESS] AOI boundary not found: {aoi}")
+        aoi = None  # Disable clipping if AOI doesn't exist
+
     # List actual feature classes in staging using arcpy.da.Walk
     feature_classes = []
     try:
+        if not arcpy.Exists(staging_gdb):
+            logging.error(f"[PROCESS] Staging GDB not found: {staging_gdb}")
+            return
+            
         for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
             feature_classes.extend(filenames)
     except Exception as e:
@@ -56,13 +65,35 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
     current_fc = fc_path
 
     try:
-        # Apply AOI clipping if configured
+        # Check if feature class has any features before processing
+        feature_count = int(arcpy.management.GetCount(current_fc)[0])
+        if feature_count == 0:
+            logging.info(f"[PROCESS] Skipping empty feature class: {fc_path}")
+            return False
+
+        # Apply AOI clipping if configured and AOI exists
         if aoi_fc and arcpy.Exists(aoi_fc):
-            temp_clip = f"{fc_path}_temp_clip"
-            arcpy.analysis.Clip(current_fc, aoi_fc, temp_clip)
-            temp_fcs.append(temp_clip)
-            current_fc = temp_clip
-            needs_processing = True
+            try:
+                temp_clip = f"{fc_path}_temp_clip"
+                logging.debug(f"[PROCESS] Clipping {fc_path} with AOI {aoi_fc}")
+                arcpy.analysis.Clip(current_fc, aoi_fc, temp_clip)
+                
+                # Check if clipping produced any features
+                clip_count = int(arcpy.management.GetCount(temp_clip)[0])
+                if clip_count > 0:
+                    temp_fcs.append(temp_clip)
+                    current_fc = temp_clip
+                    needs_processing = True
+                    logging.debug(f"[PROCESS] Clipped {feature_count} -> {clip_count} features")
+                else:
+                    logging.info(f"[PROCESS] Clipping resulted in no features for {fc_path}")
+                    # Clean up empty result
+                    if arcpy.Exists(temp_clip):
+                        arcpy.management.Delete(temp_clip)
+                    return False
+            except Exception as e:
+                logging.warning(f"[PROCESS] Clipping failed for {fc_path}: {e}")
+                # Continue without clipping if it fails
 
         # Apply reprojection if needed
         if target_wkid:
@@ -72,20 +103,26 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
                 if current_wkid != target_wkid:
                     temp_proj = f"{fc_path}_temp_proj"
                     target_sr = arcpy.SpatialReference(target_wkid)
+                    logging.debug(f"[PROCESS] Reprojecting {current_fc} from {current_wkid} to {target_wkid}")
                     arcpy.management.Project(current_fc, temp_proj, target_sr)
                     temp_fcs.append(temp_proj)
                     current_fc = temp_proj
                     needs_processing = True
-            except:
-                pass  # Skip reprojection if we can't determine current SRID
+            except Exception as e:
+                logging.warning(f"[PROCESS] Reprojection failed for {fc_path}: {e}")
+                # Skip reprojection if we can't determine current SRID
 
         # Replace original with processed version if processing was done
         if needs_processing and current_fc != fc_path:
-            arcpy.management.Delete(fc_path)
-            arcpy.management.Rename(current_fc, fc_path)
-            # Remove renamed FC from cleanup list
-            if current_fc in temp_fcs:
-                temp_fcs.remove(current_fc)
+            try:
+                arcpy.management.Delete(fc_path)
+                arcpy.management.Rename(current_fc, fc_path)
+                # Remove renamed FC from cleanup list
+                if current_fc in temp_fcs:
+                    temp_fcs.remove(current_fc)
+            except Exception as e:
+                logging.error(f"[PROCESS] Failed to replace original feature class {fc_path}: {e}")
+                return False
 
         return needs_processing
 
@@ -98,5 +135,5 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
             try:
                 if arcpy.Exists(temp_fc):
                     arcpy.management.Delete(temp_fc)
-            except:
-                pass
+            except Exception:
+                pass  # Ignore cleanup errors
