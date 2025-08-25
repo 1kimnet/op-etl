@@ -1,6 +1,8 @@
 # Workspace settings
 examine_gpkg.py
 docs/examples/*
+ETL_ISSUES_ANALYSIS_REPORT.md
+BBOX_ENHANCEMENT_SUMMARY.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
