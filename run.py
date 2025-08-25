@@ -1,13 +1,18 @@
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
-from etl.config import load_config, ConfigError
+
+from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
 
 def main():
     """Run the ETL pipeline with fixed downloader modules."""
+    # Set increased recursion limit to handle deeply nested API responses
+    sys.setrecursionlimit(3000)
+
     # Ensure logs directory exists
     Path("logs").mkdir(exist_ok=True)
 
@@ -56,7 +61,7 @@ def main():
         filtered_cfg["sources"] = sources
 
         # Import downloaders
-        from etl import download_http, download_atom, download_ogc, download_wfs, download_rest
+        from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
 
         # Run each downloader separately
         # Each module now handles its own source filtering
@@ -72,13 +77,13 @@ def main():
         stage_all_downloads(filtered_cfg)
 
         # Log monitoring summary
-        from etl.monitoring import log_pipeline_summary, save_pipeline_metrics, get_error_patterns
+        from etl.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
         log_pipeline_summary()
-        
+
         # Save metrics to file
         metrics_file = Path("logs") / f"pipeline_metrics_{Path().resolve().name}_{int(time.time())}.json"
         save_pipeline_metrics(metrics_file)
-        
+
         # Check for error patterns
         patterns = get_error_patterns()
         if patterns['recursion_errors']:

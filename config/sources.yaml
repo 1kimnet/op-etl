@@ -414,9 +414,17 @@ sources:
   download_format: zip
 - name: Ras och skred
   authority: SKS
-  type: atom
-  url: https://geodpags.skogsstyrelsen.se/geodataport/feeds/Rasochskred.xml
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaRasoskred/MapServer
   enabled: true
+  raw:
+    format: geojson
+    layer_ids:
+    - 2  # Instabila slänter - Mycket kraftig lutning
+    - 3  # Angränsande slänter med kraftig lutning
+    - 4  # Slänter - Område som kan påverkas vid ras
+    - 6  # Ravinformation - Möjlig ravinformation
+    - 7  # Ravinformation - Vattendrag i anslutning
 - name: Skogsstyrelsen - Biotopskydd (REST)
   authority: SKS
   type: rest

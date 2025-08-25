@@ -5,6 +5,7 @@ Addresses recursion depth errors and provides resilient downloading.
 
 import json
 import logging
+import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -29,6 +30,12 @@ class RecursionSafeSession:
     def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+
+        # Ensure recursion limit is set high enough for deeply nested API responses
+        current_limit = sys.getrecursionlimit()
+        if current_limit < DEFAULT_RECURSION_LIMIT:
+            sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
+            log.debug(f"[HTTP] Increased recursion limit from {current_limit} to {DEFAULT_RECURSION_LIMIT}")
 
     def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT,
                  **kwargs) -> Optional[requests.Response]:
