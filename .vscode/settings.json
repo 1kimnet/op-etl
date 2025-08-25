@@ -3,5 +3,12 @@
         "."
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "python.analysis.exclude": [
+        "**/examples"
+    ],
+    "ruff.lint.ignore": [],
+    "ruff.exclude": [
+        "C:/Program Files/ArcGIS/Pro/bin/Python/envs/arcgispro-py3/**"
+    ]
 }
