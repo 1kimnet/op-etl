@@ -1,8 +1,10 @@
 # Replace etl/process.py with this simplified version:
 
 import logging
-import arcpy
 from typing import Optional
+
+import arcpy
+
 
 def run(cfg):
     """Process all feature classes found in staging GDB."""
@@ -26,7 +28,7 @@ def run(cfg):
         if not arcpy.Exists(staging_gdb):
             logging.error(f"[PROCESS] Staging GDB not found: {staging_gdb}")
             return
-            
+
         for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
             feature_classes.extend(filenames)
     except Exception as e:
@@ -66,7 +68,7 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
 
     try:
         # Check if feature class has any features before processing
-        feature_count = int(arcpy.management.GetCount(current_fc)[0])
+        feature_count = int(str(arcpy.management.GetCount(current_fc)[0]))
         if feature_count == 0:
             logging.info(f"[PROCESS] Skipping empty feature class: {fc_path}")
             return False
@@ -77,9 +79,15 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
                 temp_clip = f"{fc_path}_temp_clip"
                 logging.debug(f"[PROCESS] Clipping {fc_path} with AOI {aoi_fc}")
                 arcpy.analysis.Clip(current_fc, aoi_fc, temp_clip)
-                
+
                 # Check if clipping produced any features
-                clip_count = int(arcpy.management.GetCount(temp_clip)[0])
+                try:
+                    clip_count = int(str(arcpy.management.GetCount(temp_clip)[0]))
+                except (ValueError, IndexError) as e:
+                    # Handle case where count operation fails
+                    clip_count = 0
+                    logging.warning(f"Could not get feature count: {e}")
+
                 if clip_count > 0:
                     temp_fcs.append(temp_clip)
                     current_fc = temp_clip
