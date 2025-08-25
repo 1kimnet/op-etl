@@ -3,14 +3,14 @@ REST API downloader for OP-ETL pipeline.
 Enhanced implementation with recursion depth protection.
 """
 
-import logging
 import json
+import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
-from .monitoring import start_monitoring_source, end_monitoring_source
+from .monitoring import end_monitoring_source, start_monitoring_source
 
 log = logging.getLogger(__name__)
 
@@ -129,8 +129,8 @@ def process_rest_source(
         include_patterns = raw_include if isinstance(raw_include, list) else None
         layer_info = discover_layers(base_url, include_patterns)
         if not layer_info:
-            # Try with just layer 0 as fallback
-            layer_info = [{"id": 0, "name": "layer_0"}]
+            log.info(f"[REST] No layers found in {name}, skipping download")
+            return True, 0  # Not a failure - just no data in BBOX/filters
     else:
         # Convert configured layer IDs to layer info format
         # We'll need to discover layer names for these IDs

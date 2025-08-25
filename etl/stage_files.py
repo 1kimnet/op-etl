@@ -3,12 +3,14 @@ Simple, reliable staging system for OP-ETL.
 Replace etl/stage_files.py with this implementation.
 """
 import logging
-import zipfile
 import shutil
+import zipfile
 from pathlib import Path
+
 import arcpy
-import unicodedata
-import re
+
+from .utils import make_arcpy_safe_name
+
 
 def stage_all_downloads(cfg: dict) -> None:
     """
@@ -106,45 +108,6 @@ def create_safe_name(file_path: Path, authority: str) -> str:
         norm_stem = "data"
 
     return make_arcpy_safe_name(f"{norm_auth}_{norm_stem}")
-
-def make_arcpy_safe_name(name: str, max_length: int = 60) -> str:
-    """Create bulletproof ArcPy-compatible feature class names."""
-    if not name:
-        return "unnamed_fc"
-
-    # Normalize unicode and remove all accents/special chars
-    normalized = unicodedata.normalize('NFD', name)
-    ascii_name = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
-
-    # Ensure ASCII only
-    try:
-        ascii_name = ascii_name.encode('ascii', 'ignore').decode('ascii')
-    except Exception:
-        ascii_name = "converted_name"
-
-    # Apply ArcPy naming rules
-    clean = ascii_name.lower().strip()
-    clean = re.sub(r'[^a-z0-9]', '_', clean)  # Only letters, numbers, underscores
-    clean = re.sub(r'_+', '_', clean)         # Collapse multiple underscores
-    clean = clean.strip('_')                  # Remove leading/trailing underscores
-
-    # Must start with letter (ArcPy requirement)
-    if clean and clean[0].isdigit():
-        clean = f"fc_{clean}"
-
-    # Handle empty results
-    if not clean or len(clean) < 1:
-        clean = "default_fc"
-
-    # Truncate to max length
-    clean = clean[:max_length]
-
-    # Handle Windows reserved words
-    reserved = {'con', 'prn', 'aux', 'nul', 'com1', 'com2', 'lpt1', 'lpt2'}
-    if clean.lower() in reserved:
-        clean = f"{clean}_data"
-
-    return clean
 
 def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) -> bool:
     """Import any supported file type to staging GDB."""

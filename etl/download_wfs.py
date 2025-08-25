@@ -94,7 +94,7 @@ def process_wfs_source(source: Dict, downloads_dir: Path,
         # Check if URL is already a GetFeature request
         if "GetFeature" in url and "typeName" in url:
             # Direct GetFeature URL
-            return download_direct_wfs(url, out_dir, name)
+            return download_direct_wfs(url, out_dir, name, global_bbox, global_sr)
         else:
             # WFS service URL
             return download_wfs_service(url, source, out_dir, name, global_bbox, global_sr)
@@ -104,11 +104,20 @@ def process_wfs_source(source: Dict, downloads_dir: Path,
         return False, 0
 
 
-def download_direct_wfs(url: str, out_dir: Path, name: str) -> Tuple[bool, int]:
-    """Download from direct GetFeature URL with enhanced error handling."""
+def download_direct_wfs(url: str, out_dir: Path, name: str,
+                       global_bbox: Optional[List[float]] = None,
+                       global_sr: Optional[int] = None) -> Tuple[bool, int]:
+    """Download from direct GetFeature URL with BBOX support and enhanced error handling."""
     session = RecursionSafeSession()
 
     try:
+        # Add BBOX filtering if configured
+        if global_bbox and len(global_bbox) >= 4:
+            separator = "&" if "?" in url else "?"
+            bbox_param = ",".join(str(v) for v in global_bbox[:4])
+            bbox_sr = global_sr or 4326
+            url = f"{url}{separator}bbox={bbox_param}&srsName=EPSG:{bbox_sr}"
+
         # Ensure GeoJSON output
         if "outputFormat=" not in url:
             separator = "&" if "?" in url else "?"

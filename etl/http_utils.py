@@ -5,15 +5,12 @@ Addresses recursion depth errors and provides resilient downloading.
 
 import json
 import logging
-import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 log = logging.getLogger(__name__)
 
@@ -27,81 +24,64 @@ DEFAULT_TIMEOUT = 60
 
 
 class RecursionSafeSession:
-    """HTTP session recursion depth protection and robust error handling."""
+    """HTTP session with simplified configuration to avoid recursion issues."""
 
     def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
-        self.session = requests.Session()
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
 
-        # Configure retry strategy
-        retry_strategy = Retry(  # type: ignore
-            # t0ype ignore used because the Retry class from urllib3.util.retry
-            # does not have a __init__ method that matches expected signature.
-            total=max_retries,
-            status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=backoff_factor,
-            raise_on_status=False
-        )
-
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
-
-        # Set user agent
-        self.session.headers.update({
-            'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)'
-        })
-
     def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT,
                  **kwargs) -> Optional[requests.Response]:
-        """Perform a safe GET request with recursion protection."""
+        """Perform a safe GET request with minimal configuration."""
         log.debug(f"[HTTP] Requesting: {url}")
 
-        original_limit = None
         try:
-            # Temporarily increase recursion limit if needed
-            original_limit = sys.getrecursionlimit()
-            if original_limit < DEFAULT_RECURSION_LIMIT:
-                sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
-                log.debug(f"[HTTP] Increased recursion limit from {original_limit} to {DEFAULT_RECURSION_LIMIT}")
+            # Use a fresh session for each request to avoid recursion issues
+            session = requests.Session()
 
-            response = self.session.get(url, timeout=timeout, stream=True, **kwargs)
+            # Set simple user agent
+            session.headers.update({
+                'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)'
+            })
 
-            # Validate response size
-            content_length = response.headers.get('content-length')
-            if content_length:
-                size_mb = int(content_length) / (1024 * 1024)
-                if size_mb > MAX_RESPONSE_SIZE_MB:
-                    log.warning(f"[HTTP] Response too large: {size_mb:.1f}MB > {MAX_RESPONSE_SIZE_MB}MB")
-                    return None
+            # Make the request with basic retry logic
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = session.get(url, timeout=timeout, **kwargs)
 
-            response.raise_for_status()
-            log.debug(f"[HTTP] Success: {url} ({response.status_code})")
+                    # Validate response size
+                    content_length = response.headers.get('content-length')
+                    if content_length:
+                        size_mb = int(content_length) / (1024 * 1024)
+                        if size_mb > MAX_RESPONSE_SIZE_MB:
+                            log.warning(f"[HTTP] Response too large: {size_mb:.1f}MB > {MAX_RESPONSE_SIZE_MB}MB")
+                            return None
 
-            return response
+                    response.raise_for_status()
+                    log.debug(f"[HTTP] Success: {url} ({response.status_code})")
+                    return response
+
+                except requests.exceptions.RequestException as e:
+                    if attempt < self.max_retries:
+                        wait_time = self.backoff_factor * (2 ** attempt)
+                        log.debug(f"[HTTP] Attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                        time.sleep(wait_time)
+                    else:
+                        log.error(f"[HTTP] Request failed after {self.max_retries + 1} attempts for {url}: {e}")
+                        return None
+
+            return None
 
         except RecursionError as e:
             log.error(f"[HTTP] Recursion error for {url}: {e}")
             return None
-        except requests.exceptions.Timeout as e:
-            log.error(f"[HTTP] Timeout for {url}: {e}")
-            return None
-        except requests.exceptions.RequestException as e:
-            log.error(f"[HTTP] Request failed for {url}: {e}")
-            return None
         except Exception as e:
             log.error(f"[HTTP] Unexpected error for {url}: {e}")
             return None
-        finally:
-            # Restore original recursion limit
-            if original_limit is not None and original_limit < DEFAULT_RECURSION_LIMIT:
-                sys.setrecursionlimit(original_limit)
 
 
 def safe_json_parse(content: Union[str, bytes], max_depth: int = MAX_JSON_DEPTH) -> Optional[Dict]:
-    """Safely parse JSON with recursion depth protection."""
-    original_limit = None
+    """Safely parse JSON with simplified error handling."""
     try:
         if isinstance(content, bytes):
             content = content.decode('utf-8', errors='replace')
@@ -110,11 +90,6 @@ def safe_json_parse(content: Union[str, bytes], max_depth: int = MAX_JSON_DEPTH)
         if len(content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
             log.warning(f"[JSON] Content too large: {len(content)} bytes")
             return None
-
-        # Temporarily increase recursion limit
-        original_limit = sys.getrecursionlimit()
-        if original_limit < DEFAULT_RECURSION_LIMIT:
-            sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
 
         try:
             data = json.loads(content)
@@ -132,9 +107,6 @@ def safe_json_parse(content: Union[str, bytes], max_depth: int = MAX_JSON_DEPTH)
         except json.JSONDecodeError as e:
             log.error(f"[JSON] Parse error: {e}")
             return None
-        finally:
-            if original_limit is not None and original_limit < DEFAULT_RECURSION_LIMIT:
-                sys.setrecursionlimit(original_limit)
 
     except Exception as e:
         log.error(f"[JSON] Unexpected error: {e}")
@@ -142,8 +114,7 @@ def safe_json_parse(content: Union[str, bytes], max_depth: int = MAX_JSON_DEPTH)
 
 
 def safe_xml_parse(content: Union[str, bytes], max_elements: int = MAX_XML_ELEMENTS) -> Optional[ET.Element]:
-    """Safely parse XML with recursion depth protection."""
-    original_limit = None
+    """Safely parse XML with simplified error handling."""
     try:
         if isinstance(content, str):
             content = content.encode('utf-8')
@@ -152,11 +123,6 @@ def safe_xml_parse(content: Union[str, bytes], max_elements: int = MAX_XML_ELEME
         if len(content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
             log.warning(f"[XML] Content too large: {len(content)} bytes")
             return None
-
-        # Temporarily increase recursion limit
-        original_limit = sys.getrecursionlimit()
-        if original_limit < DEFAULT_RECURSION_LIMIT:
-            sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
 
         try:
             # Use iterparse to limit elements processed
@@ -180,9 +146,6 @@ def safe_xml_parse(content: Union[str, bytes], max_elements: int = MAX_XML_ELEME
         except ET.ParseError as e:
             log.error(f"[XML] Parse error: {e}")
             return None
-        finally:
-            if original_limit is not None and original_limit < DEFAULT_RECURSION_LIMIT:
-                sys.setrecursionlimit(original_limit)
 
     except Exception as e:
         log.error(f"[XML] Unexpected error: {e}")

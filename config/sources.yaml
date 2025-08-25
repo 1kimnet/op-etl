@@ -1,7 +1,7 @@
 # Global defaults for bbox filtering (inherited by sources that don't specify their own)
 defaults:
-  bbox: [16.4733147, 59.0678531, 17.6430658, 59.6406047]  # Default Stockholm area in WGS84
-  bbox_sr: 3857
+  bbox: [16.4733147, 59.0678531, 17.6430658, 59.6406047]
+  bbox_sr: 4326
 
 sources:
 #---------------------------------------------------#
