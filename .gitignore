@@ -1,6 +1,6 @@
 # Workspace settings
 examine_gpkg.py
-
+docs/examples/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
