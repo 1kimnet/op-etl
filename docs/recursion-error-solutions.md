@@ -44,6 +44,14 @@ def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
 - OGC sources: 75% success (3/4) - 25,239 features downloaded
 - All failures are now legitimate network/data issues, not recursion errors
 
+**LATEST UPDATE (2025-08-26)**: Enhanced recursion protection implemented
+- ✅ Comprehensive RecursionError handling in all HTTP operations
+- ✅ Proactive recursion depth monitoring with early warning system
+- ✅ Automatic fallback to urllib when requests library causes recursion
+- ✅ Multiple protection layers prevent recursion in header/response processing
+- ✅ All download modules (ATOM, OGC, REST, WFS) now recursion-safe
+- ✅ Enhanced error logging for better debugging
+
 ### Testing Verification
 ```bash
 # Before fix
@@ -73,11 +81,21 @@ curl "https://api.sgu.se/oppnadata/stranderosion-kust/ogc/features/v1/collection
 - Implements retry logic with exponential backoff (3 attempts by default)
 - Includes response size validation (100MB limit)
 - Provides timeout protection (60 seconds default)
+- **NEW**: Proactive recursion depth monitoring with configurable thresholds
+- **NEW**: Comprehensive RecursionError exception handling for all requests operations
+- **NEW**: Automatic fallback to urllib when requests library causes recursion issues
+- **NEW**: Multiple protection layers for header extraction, response reading, and cleanup
 
 #### Safe Parsing Functions
 - `safe_json_parse()`: Depth-limited JSON parsing with recursion protection
 - `safe_xml_parse()`: Element-count limited XML parsing with BytesIO handling
 - `validate_response_content()`: Pre-parsing content validation
+- **NEW**: Proactive recursion depth checks before parsing operations
+
+#### Monitoring Functions
+- `get_current_recursion_depth()`: Real-time recursion depth monitoring
+- `check_recursion_safety()`: Configurable threshold-based safety checks
+- Enhanced error logging with recursion context
 
 #### Safety Limits
 ```python
@@ -86,7 +104,16 @@ MAX_JSON_DEPTH = 50             # Maximum JSON nesting depth
 MAX_XML_ELEMENTS = 50000        # Maximum XML elements
 DEFAULT_RECURSION_LIMIT = 3000  # Increased recursion limit
 DEFAULT_TIMEOUT = 60            # Request timeout in seconds
+
+# NEW: Recursion monitoring constants
+RECURSION_WARNING_THRESHOLD = 0.8  # Warn at 80% of recursion limit
 ```
+
+#### Enhanced Error Handling
+- **RecursionError Handling**: Specific exception catching for all requests operations
+- **Fallback Mechanisms**: Automatic urllib fallback when requests fails
+- **Progressive Degradation**: Multiple fallback levels for header extraction
+- **Early Detection**: Proactive recursion depth monitoring
 
 ### 2. Enhanced Download Modules
 
