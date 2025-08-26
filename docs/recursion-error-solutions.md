@@ -44,10 +44,13 @@ def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
 - OGC sources: 75% success (3/4) - 25,239 features downloaded
 - All failures are now legitimate network/data issues, not recursion errors
 
-**LATEST UPDATE (2025-08-26)**: Enhanced recursion protection implemented
+**LATEST UPDATE (2025-01-24)**: Switched urllib as primary HTTP library  
+- ✅ urllib is now the primary HTTP library for all requests (REST, OGC, ATOM, WFS)
+- ✅ requests library retained as fallback for HTTPS requests only
+- ✅ Eliminates maximum recursion depth errors at the source
+- ✅ More reliable and stable HTTP operations across all service types
 - ✅ Comprehensive RecursionError handling in all HTTP operations
 - ✅ Proactive recursion depth monitoring with early warning system
-- ✅ Automatic fallback to urllib when requests library causes recursion
 - ✅ Multiple protection layers prevent recursion in header/response processing
 - ✅ All download modules (ATOM, OGC, REST, WFS) now recursion-safe
 - ✅ Enhanced error logging for better debugging
@@ -72,19 +75,59 @@ curl "https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.LST_
 curl "https://api.sgu.se/oppnadata/stranderosion-kust/ogc/features/v1/collections"  # ✅ Works
 ```
 
-## Previous Implementation Details
+## urllib as Primary HTTP Library (2025-01-24)
 
-### 1. Robust HTTP Utilities (`etl/http_utils.py`)
+### New Approach: urllib First, requests Fallback
+
+The system now uses a **primary/fallback approach** that eliminates recursion errors at the source:
+
+1. **Primary**: urllib handles all HTTP requests (REST, OGC, ATOM, WFS)
+   - Lightweight, built-in Python library
+   - No recursion depth issues in normal operation
+   - Handles all common HTTP scenarios including:
+     - Query parameters
+     - Custom headers  
+     - Gzip decompression
+     - Response validation
+
+2. **Fallback**: requests used only for HTTPS when urllib fails
+   - Limited to specific HTTPS failure scenarios
+   - Comprehensive recursion protection when used
+   - Maintains compatibility for edge cases
+
+### Implementation Changes
 
 #### RecursionSafeSession
+- **CHANGED**: `urllib` is now the primary HTTP method, not the fallback
+- **CHANGED**: `requests` only used as fallback for HTTPS requests when urllib fails
+- **IMPROVED**: Better parameter handling (params, headers) in urllib implementation
 - Automatically increases recursion limit from 1000 to 3000 when needed
 - Implements retry logic with exponential backoff (3 attempts by default)
 - Includes response size validation (100MB limit)
 - Provides timeout protection (60 seconds default)
-- **NEW**: Proactive recursion depth monitoring with configurable thresholds
-- **NEW**: Comprehensive RecursionError exception handling for all requests operations
-- **NEW**: Automatic fallback to urllib when requests library causes recursion issues
-- **NEW**: Multiple protection layers for header extraction, response reading, and cleanup
+- Proactive recursion depth monitoring with configurable thresholds
+- Comprehensive RecursionError exception handling for all requests operations
+- Multiple protection layers for header extraction, response reading, and cleanup
+
+#### download_with_retries
+- **CHANGED**: Now uses urllib as primary method for file downloads
+- **CHANGED**: requests fallback only for HTTPS download failures
+- Maintains streaming capability for large files
+- Size validation and safety checks preserved
+
+## Previous Implementation Details
+
+### 1. Robust HTTP Utilities (`etl/http_utils.py`)
+
+#### RecursionSafeSession (Legacy Approach)
+- ~~Automatically increases recursion limit from 1000 to 3000 when needed~~
+- ~~Implements retry logic with exponential backoff (3 attempts by default)~~
+- ~~Includes response size validation (100MB limit)~~
+- ~~Provides timeout protection (60 seconds default)~~
+- **OLD**: Proactive recursion depth monitoring with configurable thresholds
+- **OLD**: Comprehensive RecursionError exception handling for all requests operations
+- **OLD**: Automatic fallback to urllib when requests library causes recursion issues
+- **OLD**: Multiple protection layers for header extraction, response reading, and cleanup
 
 #### Safe Parsing Functions
 - `safe_json_parse()`: Depth-limited JSON parsing with recursion protection
