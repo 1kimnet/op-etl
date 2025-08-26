@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+import arcpy
+
 from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
