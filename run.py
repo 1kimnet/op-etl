@@ -128,7 +128,6 @@ def main():
         staging_dir = staging_gdb_path.parent
         staging_gdb_name = staging_gdb_path.name
 
-        import arcpy
         arcpy.management.CreateFileGDB(str(staging_dir), staging_gdb_name)
         logging.info("New staging geodatabase created")
 
