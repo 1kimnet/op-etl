@@ -27,8 +27,8 @@ def run(cfg):
             logging.info(f"[LOAD] Found {len(successfully_processed)} successfully processed feature classes")
         else:
             logging.warning("[LOAD] No processed feature classes list found - will load all feature classes")
-    except Exception as e:
-        logging.warning(f"[LOAD] Failed to load processed feature classes list: {e} - will load all feature classes")
+    except (json.JSONDecodeError, IOError) as e:
+        logging.warning(f"[LOAD] Failed to load processed feature classes list ({type(e).__name__}): {e} - will load all feature classes")
 
     # List actual feature classes in staging using arcpy.da.Walk
     feature_classes = []
