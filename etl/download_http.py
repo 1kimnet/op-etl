@@ -8,12 +8,11 @@ Handles only direct file downloads, leaves specialized types to their own module
 import logging
 import re
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 import zipfile
 from datetime import datetime
 from pathlib import Path
-
 
 log = logging.getLogger(__name__)
 
@@ -71,38 +70,65 @@ def run(cfg: dict) -> None:
 
 
 def process_file_source(source: dict, downloads_dir: Path) -> bool:
-    """Process a single file/HTTP source."""
-    url = source.get("url")
-    if not url:
-        log.warning(f"[HTTP] No URL for {source['name']}")
-        return False
-
+    """
+    Process a single file/HTTP source.
+    Handles index URLs where multiple layers are downloaded from a base URL.
+    """
     authority = source.get("authority", "unknown")
     name = source.get("name", "unnamed")
-
-    # Create output directory
     out_dir = downloads_dir / authority
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        # Download file
-        file_path = download_file(url, out_dir, name)
+    # Case 1: URL is an index, and we need to download multiple layers
+    raw_data = source.get("raw", {})
+    if isinstance(raw_data.get("layer_name"), list):
+        base_url = source["url"]
+        if not base_url.endswith("/"):
+            base_url += "/"
 
-        # Extract if ZIP
-        if file_path.suffix.lower() == ".zip":
-            extract_dir = out_dir / slug(file_path.stem)
-            extract_dir.mkdir(parents=True, exist_ok=True)
+        layers = source["raw"]["layer_name"]
+        if not layers:
+            log.warning(f"Source '{name}' is a file index but contains no layers to download.")
+            return False
+        log.info(f"Source '{name}' is a file index. Found {len(layers)} layers to download.")
+        results = []
+        file_extension = source.get("file_extension", ".zip")
+        for layer in layers:
+            try:
+                # Use configurable file extension, defaulting to .zip
+                file_url = f"{base_url}{layer}{file_extension}"
+                file_path = download_file(file_url, out_dir, layer)
 
-            with zipfile.ZipFile(file_path, 'r') as zf:
-                zf.extractall(extract_dir)
+                if file_path.suffix.lower() == ".zip":
+                    extract_dir = out_dir / slug(file_path.stem)
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(file_path, 'r') as zf:
+                        zf.extractall(extract_dir)
+                    log.info(f"[HTTP] Extracted '{layer}' to {extract_dir}")
+                results.append(True)
+            except Exception as e:
+                log.error(f"[HTTP] Failed to process layer '{layer}' from '{name}': {e}")
+                results.append(False)
+        return all(results)
 
-            log.info(f"[HTTP] Extracted to {extract_dir}")
-
-        return True
-
-    except Exception as e:
-        log.error(f"[HTTP] Download failed for {name}: {e}")
-        return False
+    # Case 2: URL is a single file
+    else:
+        url = source.get("url")
+        if not url:
+            log.warning(f"[HTTP] No URL for {name}")
+            return False
+        try:
+            file_path = download_file(url, out_dir, name)
+            if file_path.suffix.lower() == ".zip":
+                extract_dir = out_dir / slug(file_path.stem)
+                extract_dir.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(file_path, 'r') as zf:
+                    zf.extractall(extract_dir)
+                log.info(f"[HTTP] Extracted to {extract_dir}")
+            return True
+        except Exception as e:
+            log.error(f"[HTTP] Download failed for {name}: {e}")
+            return False
 
 
 def download_file(url: str, out_dir: Path, hint: str) -> Path:
@@ -161,4 +187,5 @@ def download_file(url: str, out_dir: Path, hint: str) -> Path:
                 time.sleep(backoff)
                 backoff *= 2
 
-    raise RuntimeError(f"Download failed after {max_attempts} attempts")
+    # If all attempts fail, raise an error
+    raise RuntimeError(f"Failed to download file from {url} after {max_attempts} attempts.")

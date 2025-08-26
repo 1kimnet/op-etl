@@ -1,8 +1,11 @@
 # Replace etl/load_sde.py with this simplified version:
 
+import json
 import logging
-import arcpy
 from pathlib import Path
+
+import arcpy
+
 
 def run(cfg):
     """Load all staged feature classes to SDE."""
@@ -12,6 +15,20 @@ def run(cfg):
     if not sde_conn:
         logging.warning("[LOAD] No SDE connection configured")
         return
+
+    # Load list of successfully processed feature classes
+    processed_file = Path(staging_gdb).parent / "processed_feature_classes.json"
+    successfully_processed = []
+
+    try:
+        if processed_file.exists():
+            with open(processed_file, 'r') as f:
+                successfully_processed = json.load(f)
+            logging.info(f"[LOAD] Found {len(successfully_processed)} successfully processed feature classes")
+        else:
+            logging.warning("[LOAD] No processed feature classes list found - will load all feature classes")
+    except (json.JSONDecodeError, IOError) as e:
+        logging.warning(f"[LOAD] Failed to load processed feature classes list ({type(e).__name__}): {e} - will load all feature classes")
 
     # List actual feature classes in staging using arcpy.da.Walk
     feature_classes = []
@@ -25,6 +42,17 @@ def run(cfg):
     if not feature_classes:
         logging.info("[LOAD] No feature classes found in staging")
         return
+
+    # Filter feature classes to only include successfully processed ones
+    if successfully_processed:
+        original_count = len(feature_classes)
+        excluded_feature_classes = [fc for fc in feature_classes if fc not in successfully_processed]
+        feature_classes = [fc for fc in feature_classes if fc in successfully_processed]
+        excluded_count = original_count - len(feature_classes)
+        if excluded_count > 0:
+            logging.info(f"[LOAD] Excluding {excluded_count} feature classes that were not successfully processed (no regional data)")
+            logging.info(f"[LOAD] Excluded feature classes: {excluded_feature_classes}")
+        logging.info(f"[LOAD] Loading {len(feature_classes)} feature classes with regional data")
 
     loaded_count = 0
 
@@ -53,7 +81,7 @@ def run(cfg):
                 logging.warning(f"[LOAD] ✗ {fc_name} failed")
 
         except Exception as e:
-            logging.error(f"[LOAD] Error loading {fc_name}: {e}")
+            logging.error(f"[LOAD] ✗ {fc_name}: {e}")
 
     logging.info(f"[LOAD] Loaded {loaded_count} feature classes to SDE")
 
