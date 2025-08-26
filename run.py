@@ -30,7 +30,6 @@ def _remove_geodatabase_safely(gdb_path):
             except (OSError, PermissionError):
                 # If it's still locked, log and continue
                 logging.warning(f"Could not remove locked file: {path}")
-                pass
 
     max_attempts = 3
     for attempt in range(max_attempts):
