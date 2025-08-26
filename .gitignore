@@ -238,3 +238,4 @@ config/sources_backup.yaml
 #Ignore insiders AI rules
 .github\instructions\codacy.instructions.md
 BBOX_ENHANCEMENT_SUMMARY.md
+test_filtering.py

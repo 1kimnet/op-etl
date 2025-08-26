@@ -1,11 +1,81 @@
 import argparse
 import logging
+import os
+import shutil
+import stat
 import sys
 import time
 from pathlib import Path
 
 from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
+
+
+def _remove_geodatabase_safely(gdb_path):
+    """
+    Safely remove a geodatabase directory, handling lock files and permissions.
+
+    Args:
+        gdb_path (Path): Path to the geodatabase directory
+    """
+    def handle_remove_readonly(func, path, exc):
+        """
+        Error handler for shutil.rmtree to handle read-only and locked files.
+        """
+        if os.path.exists(path):
+            # Try to make the file writable and remove it
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except (OSError, PermissionError):
+                # If it's still locked, log and continue
+                logging.warning(f"Could not remove locked file: {path}")
+
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            shutil.rmtree(gdb_path, onerror=handle_remove_readonly)
+            if not gdb_path.exists():
+                return  # Successfully removed
+        except Exception as e:
+            logging.warning(f"Attempt {attempt + 1}: Error removing geodatabase {gdb_path}: {e}")
+
+        # If removal failed, try waiting a bit for locks to release
+        if attempt < max_attempts - 1:
+            time.sleep(1)
+
+    # If we get here, direct removal failed. Try rename strategy
+    try:
+        temp_path = gdb_path.with_suffix(f".{int(time.time())}.bak")
+        gdb_path.rename(temp_path)
+        logging.info(f"Renamed geodatabase to: {temp_path}")
+
+        # Try to remove the renamed directory
+        try:
+            shutil.rmtree(temp_path, onerror=handle_remove_readonly)
+            logging.info("Successfully removed renamed geodatabase")
+        except Exception:
+            logging.warning(f"Could not remove {temp_path}, but it's renamed out of the way")
+
+    except Exception as rename_error:
+        logging.error(f"Could not rename geodatabase: {rename_error}")
+        # As a last resort, try to clear the directory contents
+        try:
+            for item in gdb_path.iterdir():
+                try:
+                    if item.is_file():
+                        item.chmod(stat.S_IWRITE)
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                except Exception as item_error:
+                    logging.warning(f"Could not remove item {item}: {item_error}")
+            # Try to remove the now-empty directory
+            gdb_path.rmdir()
+            logging.info("Successfully cleared geodatabase directory contents")
+        except Exception as clear_error:
+            logging.error(f"Final cleanup attempt failed: {clear_error}")
+            raise OSError(f"Could not remove geodatabase {gdb_path}. Manual cleanup may be required.")
 
 
 def main():
@@ -43,6 +113,22 @@ def main():
         raise SystemExit(f"Config error: {e}")
 
     ensure_workspaces(cfg)
+
+    # Clean and recreate staging geodatabase if configured
+    if cfg.get("cleanup_staging_before_run", False):
+        staging_gdb_path = Path(cfg["workspaces"]["staging_gdb"]).resolve()
+        if staging_gdb_path.exists():
+            logging.info(f"Cleaning staging geodatabase: {staging_gdb_path}")
+            _remove_geodatabase_safely(staging_gdb_path)
+            logging.info("Staging geodatabase cleaned")
+
+        # Recreate empty staging geodatabase
+        logging.info(f"Creating new staging geodatabase: {staging_gdb_path}")
+        staging_dir = staging_gdb_path.parent
+        staging_gdb_name = staging_gdb_path.name
+
+        arcpy.management.CreateFileGDB(str(staging_dir), staging_gdb_name)
+        logging.info("New staging geodatabase created")
 
     do_all = not any((args.download, args.process, args.load_sde))
 
