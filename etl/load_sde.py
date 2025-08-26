@@ -1,8 +1,10 @@
 # Replace etl/load_sde.py with this simplified version:
 
 import logging
-import arcpy
 from pathlib import Path
+
+import arcpy
+
 
 def run(cfg):
     """Load all staged feature classes to SDE."""
@@ -35,8 +37,9 @@ def run(cfg):
         authority = fc_name.split('_', 1)[0].upper() if '_' in fc_name else None
         dataset_name = f"Underlag_{authority}" if authority else None
 
-        # Strip the authority_ prefix from the destination feature class name
-        clean_fc_name = fc_name.split('_', 1)[1] if '_' in fc_name else fc_name
+        # Strip the authority_ prefix and any file extension from the destination feature class name
+        base_name = fc_name.split('_', 1)[1] if '_' in fc_name else fc_name
+        clean_fc_name = Path(base_name).stem
 
         # Resolve destination path: prefer dataset if it exists or can be created
         dest_fc = resolve_sde_destination(sde_conn, dataset_name, clean_fc_name, src_fc)
@@ -59,15 +62,19 @@ def run(cfg):
 
 def load_to_sde(src_fc: str, dest_fc: str, fc_name: str) -> bool:
     """Load feature class to SDE with truncate-and-load strategy."""
+    # Sanitize fc_name by removing file extension for SDE
+    sde_fc_name = Path(fc_name).stem
+
     try:
         if arcpy.Exists(dest_fc):
-            # Truncate existing data
+            logging.info(f"[LOAD] Truncating existing SDE feature class: {sde_fc_name}")
             arcpy.management.TruncateTable(dest_fc)
         else:
-            # Create new feature class from template
+            logging.info(f"[LOAD] Creating new SDE feature class: {sde_fc_name}")
             create_sde_fc(src_fc, dest_fc)
 
         # Append data
+        logging.info(f"[LOAD] Appending data to {sde_fc_name}")
         arcpy.management.Append(
             inputs=src_fc,
             target=dest_fc,
@@ -76,8 +83,11 @@ def load_to_sde(src_fc: str, dest_fc: str, fc_name: str) -> bool:
 
         return True
 
+    except arcpy.ExecuteError:
+        logging.error(f"[LOAD] Failed to load {sde_fc_name}: {arcpy.GetMessages(2)}")
+        return False
     except Exception as e:
-        logging.error(f"[LOAD] Failed to load {fc_name}: {e}")
+        logging.error(f"[LOAD] An unexpected error occurred while loading {sde_fc_name}: {e}")
         return False
 
 def create_sde_fc(template_fc: str, dest_fc: str):
