@@ -84,14 +84,27 @@ class RecursionSafeSession:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 content = response.read()
                 
+                # Handle gzip decompression if needed
+                try:
+                    import gzip
+                    encoding = response.headers.get('content-encoding', '').lower()
+                    if encoding == 'gzip' and content:
+                        content = gzip.decompress(content)
+                except Exception as e:
+                    log.debug(f"[HTTP] Gzip decompression failed, using raw content: {e}")
+                
+                # Check for empty content
+                if not content:
+                    log.warning(f"[HTTP] Urllib received empty response from {url}")
+                    return None
+                
                 # Extract basic headers
                 safe_headers = {}
                 for header_name, header_value in response.headers.items():
                     safe_headers[str(header_name).lower()] = str(header_value)
                 
-                # Ensure content-length is set
-                if 'content-length' not in safe_headers:
-                    safe_headers['content-length'] = str(len(content))
+                # Ensure content-length is set (update after potential decompression)
+                safe_headers['content-length'] = str(len(content))
                 
                 return SimpleResponse(
                     status_code=response.getcode() or 200,
@@ -273,8 +286,14 @@ def safe_json_parse(content: Union[str, bytes], max_size_mb: int = 50) -> Option
             log.warning("[JSON] Content is None")
             return None
 
+        # Convert bytes to string if needed
         if isinstance(content, bytes):
             content = content.decode('utf-8', errors='replace')
+
+        # Check for empty content after conversion
+        if not content or len(content.strip()) == 0:
+            log.warning("[JSON] Content is empty or whitespace-only")
+            return None
 
         # Check content size
         if len(content) > max_size_mb * 1024 * 1024:
@@ -454,6 +473,11 @@ def download_with_retries(url: str, output_path: Path,
 def validate_response_content(response: SimpleResponse) -> bool:
     """Basic response validation for SimpleResponse."""
     try:
+        # Check for empty content
+        if not response.content or len(response.content) == 0:
+            log.warning("[VALIDATE] Response content is empty")
+            return False
+            
         content_type = response.headers.get('content-type', '').lower()
 
         if len(response.content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
