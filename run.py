@@ -1,5 +1,6 @@
 import argparse
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -43,6 +44,23 @@ def main():
         raise SystemExit(f"Config error: {e}")
 
     ensure_workspaces(cfg)
+
+    # Clean and recreate staging geodatabase if configured
+    if cfg.get("cleanup_staging_before_run", False):
+        staging_gdb_path = Path(cfg["workspaces"]["staging_gdb"]).resolve()
+        if staging_gdb_path.exists():
+            logging.info(f"Cleaning staging geodatabase: {staging_gdb_path}")
+            shutil.rmtree(staging_gdb_path)
+            logging.info("Staging geodatabase cleaned")
+
+        # Recreate empty staging geodatabase
+        logging.info(f"Creating new staging geodatabase: {staging_gdb_path}")
+        staging_dir = staging_gdb_path.parent
+        staging_gdb_name = staging_gdb_path.name
+
+        import arcpy
+        arcpy.management.CreateFileGDB(str(staging_dir), staging_gdb_name)
+        logging.info("New staging geodatabase created")
 
     do_all = not any((args.download, args.process, args.load_sde))
 

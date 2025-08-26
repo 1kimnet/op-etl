@@ -2,11 +2,11 @@
 
 Keep these helpers minimal: choose best candidate by feature count.
 """
-from pathlib import Path
 import logging
-import sys
 import re
+import sys
 import unicodedata
+from pathlib import Path
 from typing import List, Optional
 
 
@@ -60,7 +60,7 @@ def log_http_request(log: logging.Logger, session, method: str, url: str, **kwar
     return response
 
 
-def make_arcpy_safe_name(name: str, max_length: int = 60) -> str:
+def make_arcpy_safe_name(name: str, max_length: int = 100) -> str:
     """Create ArcPy-safe feature class names that always work.
 
     Handles Swedish characters, Unicode normalization, and ArcPy naming restrictions.
