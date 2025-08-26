@@ -6,6 +6,7 @@ Fixed recursion issues with response header handling.
 import json
 import logging
 import os
+import sys
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 MAX_RESPONSE_SIZE_MB = 100
 DEFAULT_TIMEOUT = 60
 MAX_JSON_DEPTH = 100  # Explicit JSON recursion depth limit
+DEFAULT_RECURSION_LIMIT = 3000
 
 
 @dataclass
@@ -35,10 +37,16 @@ class SimpleResponse:
         return safe_json_parse(self.content)
 
 
-class SimpleHttpSession:
-    """Simplified HTTP session that avoids recursion issues."""
+class RecursionSafeSession:
+    """A robust, simplified HTTP session that avoids recursion issues."""
 
     def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
+        # Ensure recursion limit is set high enough as a safety net
+        current_limit = sys.getrecursionlimit()
+        if current_limit < DEFAULT_RECURSION_LIMIT:
+            sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
+            log.debug(f"[HTTP] Increased recursion limit from {current_limit} to {DEFAULT_RECURSION_LIMIT}")
+
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
 
@@ -327,7 +335,3 @@ def validate_response_content(response: SimpleResponse) -> bool:
     except Exception as e:
         log.warning(f"[VALIDATE] Validation error: {e}")
         return False
-
-
-# For backward compatibility, create alias
-RecursionSafeSession = SimpleHttpSession
