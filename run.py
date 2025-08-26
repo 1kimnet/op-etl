@@ -68,8 +68,8 @@ def _remove_geodatabase_safely(gdb_path):
                         item.unlink()
                     elif item.is_dir():
                         shutil.rmtree(item, ignore_errors=True)
-                except Exception:
-                    pass
+                except Exception as item_error:
+                    logging.warning(f"Could not remove item {item}: {item_error}")
             # Try to remove the now-empty directory
             gdb_path.rmdir()
             logging.info("Successfully cleared geodatabase directory contents")
