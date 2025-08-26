@@ -88,10 +88,11 @@ def process_file_source(source: dict, downloads_dir: Path) -> bool:
         layers = source["raw"]["layer_name"]
         log.info(f"Source '{name}' is a file index. Found {len(layers)} layers to download.")
         results = []
+        file_extension = source.get("file_extension", ".zip")
         for layer in layers:
             try:
-                # Assume the file extension is .zip; this could be made configurable
-                file_url = f"{base_url}{layer}.zip"
+                # Use configurable file extension, defaulting to .zip
+                file_url = f"{base_url}{layer}{file_extension}"
                 file_path = download_file(file_url, out_dir, layer)
 
                 if file_path.suffix.lower() == ".zip":
@@ -178,8 +179,12 @@ def download_file(url: str, out_dir: Path, hint: str) -> Path:
 
         except Exception as e:
             log.warning(f"[HTTP] Attempt {attempt}/{max_attempts} failed: {e}")
-            if attempt < max_attempts:
-                time.sleep(backoff)
-                backoff *= 2
+                    if attempt < max_attempts:
+                            time.sleep(backoff)
+                            backoff *= 2
 
-    raise RuntimeError(f"Download failed after {max_attempts} attempts")
+                # If all attempts fail, raise an error
+                raise RuntimeError(f"Download failed after {max_attempts} attempts")
+
+            # If all attempts fail, raise an error
+            raise RuntimeError(f"Failed to download file from {url} after {max_attempts} attempts.")
