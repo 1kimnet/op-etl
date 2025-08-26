@@ -1,6 +1,8 @@
 # Replace etl/process.py with this simplified version:
 
+import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 import arcpy
@@ -40,6 +42,7 @@ def run(cfg):
         return
 
     processed_count = 0
+    successfully_processed = []  # Track feature classes that were successfully processed
 
     for fc_name in feature_classes:
         fc_path = f"{staging_gdb}/{fc_name}"
@@ -51,12 +54,22 @@ def run(cfg):
             processed = process_feature_class(fc_path, aoi, target_wkid)
             if processed:
                 processed_count += 1
+                successfully_processed.append(fc_name)
                 logging.info(f"[PROCESS] ✓ {fc_name}")
             else:
                 logging.info(f"[PROCESS] - {fc_name} (no processing needed)")
 
         except Exception as e:
             logging.error(f"[PROCESS] ✗ {fc_name}: {e}")
+
+    # Save list of successfully processed feature classes for the loading step
+    try:
+        processed_file = Path(staging_gdb).parent / "processed_feature_classes.json"
+        with open(processed_file, 'w') as f:
+            json.dump(successfully_processed, f, indent=2)
+        logging.info(f"[PROCESS] Saved {len(successfully_processed)} successfully processed feature classes to {processed_file}")
+    except Exception as e:
+        logging.warning(f"[PROCESS] Failed to save processed feature classes list: {e}")
 
     logging.info(f"[PROCESS] Processed {processed_count} feature classes")
 
