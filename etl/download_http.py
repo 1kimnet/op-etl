@@ -80,7 +80,8 @@ def process_file_source(source: dict, downloads_dir: Path) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Case 1: URL is an index, and we need to download multiple layers
-    if "raw" in source and isinstance(source.get("raw", {}).get("layer_name"), list):
+    raw_data = source.get("raw", {})
+    if isinstance(raw_data.get("layer_name"), list):
         base_url = source["url"]
         if not base_url.endswith("/"):
             base_url += "/"
