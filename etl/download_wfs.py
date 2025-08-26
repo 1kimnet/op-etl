@@ -14,6 +14,38 @@ from etl.monitoring import end_monitoring_source, start_monitoring_source
 log = logging.getLogger(__name__)
 
 
+def _save_wfs_response(response, out_dir: Path, file_name: str) -> bool:
+    """Validate, parse, and save a WFS response."""
+    if not validate_response_content(response):
+        log.error(f"[WFS] Invalid response content from {response.url}")
+        return False
+
+    try:
+        # Try to parse as JSON (GeoJSON)
+        data = safe_json_parse(response.content)
+        if data:
+            out_file = out_dir / f"{file_name}.geojson"
+            with open(out_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False)
+            log.info(f"[WFS] Saved {file_name} as GeoJSON")
+            return True
+
+        # Fallback to XML (GML) if JSON parsing fails or yields no data
+        root = safe_xml_parse(response.content)
+        if root:
+            out_file = out_dir / f"{file_name}.gml"
+            out_file.write_text(response.text, encoding='utf-8')
+            log.info(f"[WFS] Saved {file_name} as GML")
+            return True
+
+        log.error(f"[WFS] Failed to parse response for {file_name} as JSON or XML.")
+        return False
+
+    except Exception as e:
+        log.error(f"[WFS] Failed to save response for {file_name}: {e}")
+        return False
+
+
 def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int]]:
     try:
         if not cfg.get("use_bbox_filter", False):
@@ -130,32 +162,8 @@ def download_direct_wfs(url: str, out_dir: Path, name: str,
             log.error(f"[WFS] Failed to fetch {url}")
             return False, 0
 
-        if not validate_response_content(response):
-            log.error(f"[WFS] Invalid response content from {url}")
-            return False, 0
-
-        # Save response
-        try:
-            data = safe_json_parse(response.content)
-            if data:
-                out_file = out_dir / f"{name}.geojson"
-                with open(out_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False)
-                log.info(f"[WFS] Saved {name} as GeoJSON")
-                return True, 1
-            else:
-                # Try XML parsing if JSON failed
-                root = safe_xml_parse(response.content)
-                if root:
-                    out_file = out_dir / f"{name}.gml"
-                    out_file.write_text(response.text, encoding='utf-8')
-                    log.info(f"[WFS] Saved {name} as GML")
-                    return True, 1
-        except Exception as e:
-            log.error(f"[WFS] Failed to save response: {e}")
-            return False, 0
-
-        return False, 0
+        success = _save_wfs_response(response, out_dir, name)
+        return success, 1 if success else 0
 
     except RecursionError as e:
         log.error(f"[WFS] Recursion error downloading: {e}")
@@ -170,71 +178,67 @@ def download_wfs_service(url: str, source: Dict, out_dir: Path, name: str,
     """Download from WFS service URL with enhanced error handling."""
     session = RecursionSafeSession()
     raw = source.get("raw", {})
+    name = source["name"]
 
-    # Extract typename from raw config
-    typename = raw.get("typename") or raw.get("typeName")
-    if not typename:
+    # Extract typename(s) from raw config
+    typenames_config = raw.get("typename") or raw.get("typeName")
+    if not typenames_config:
         # Try to extract from URL if present
         if "typeName=" in url:
-            typename = url.split("typeName=")[1].split("&")[0]
+            typenames_config = url.split("typeName=")[1].split("&")[0]
         else:
             log.warning(f"[WFS] No typename specified for {name}")
             return False, 0
 
-    try:
-        log.info(f"[WFS] Downloading WFS service: {typename}")
+    # Ensure typenames is a list
+    if isinstance(typenames_config, str):
+        typenames = [typenames_config]
+    else:
+        typenames = typenames_config
 
-        # Build GetFeature request
-        params = {
-            "service": "WFS",
-            "version": "2.0.0",
-            "request": "GetFeature",
-            "typeName": typename,
-            "outputFormat": "application/json"
-        }
+    success_count = 0
+    total_count = len(typenames)
 
-        # Add bbox if configured
-        bbox = raw.get("bbox") or global_bbox
-        if bbox and len(bbox) >= 4:
-            params["bbox"] = ",".join(str(v) for v in bbox[:4])
-            bbox_sr = raw.get("bbox_sr") or global_sr or 4326
-            params["srsName"] = f"EPSG:{bbox_sr}"
-
-        response = session.safe_get(url, params=params, timeout=120)
-        if not response:
-            log.error(f"[WFS] Failed to fetch WFS service: {url}")
-            return False, 0
-
-        if not validate_response_content(response):
-            log.error(f"[WFS] Invalid response content from WFS service: {url}")
-            return False, 0
-
-        # Save response
+    for typename in typenames:
         try:
-            data = safe_json_parse(response.content)
-            if data:
-                out_file = out_dir / f"{name}.geojson"
-                with open(out_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False)
-                log.info(f"[WFS] Saved {typename} as GeoJSON")
-                return True, 1
-            else:
-                # Try XML parsing if JSON failed
-                root = safe_xml_parse(response.content)
-                if root:
-                    out_file = out_dir / f"{name}.gml"
-                    out_file.write_text(response.text, encoding='utf-8')
-                    log.info(f"[WFS] Saved {typename} as GML")
-                    return True, 1
+            log.info(f"[WFS] Processing typename '{typename}' for source '{name}'")
+
+            # Build GetFeature request
+            params = {
+                "service": "WFS",
+                "version": "2.0.0",
+                "request": "GetFeature",
+                "typeName": typename,
+                "outputFormat": "application/json"
+            }
+
+            # Add bbox if configured
+            bbox = raw.get("bbox") or global_bbox
+            if bbox and len(bbox) >= 4:
+                params["bbox"] = ",".join(str(v) for v in bbox[:4])
+                bbox_sr = raw.get("bbox_sr") or global_sr or 4326
+                params["srsName"] = f"EPSG:{bbox_sr}"
+
+            response = session.safe_get(url, params=params, timeout=120)
+            if not response:
+                log.error(f"[WFS] Failed to fetch WFS service for typename {typename}: {url}")
+                continue
+
+            # Use a unique name for each typename if there are multiple
+            file_name = f"{name}_{typename}" if total_count > 1 else name
+            if _save_wfs_response(response, out_dir, file_name):
+                success_count += 1
+
+        except RecursionError as e:
+            log.error(f"[WFS] Recursion error on typename {typename}: {e}")
         except Exception as e:
-            log.error(f"[WFS] Failed to save response: {e}")
-            return False, 0
+            log.error(f"[WFS] Request failed for typename {typename}: {e}")
 
+    if success_count == 0 and total_count > 0:
+        log.error(f"[WFS] All typenames failed for source {name}")
         return False, 0
 
-    except RecursionError as e:
-        log.error(f"[WFS] Recursion error requesting service: {e}")
-        return False, 0
-    except Exception as e:
-        log.error(f"[WFS] Service request failed: {e}")
-        return False, 0
+    if success_count < total_count:
+        log.warning(f"[WFS] Partially completed {name}: {success_count}/{total_count} typenames downloaded.")
+
+    return True, success_count

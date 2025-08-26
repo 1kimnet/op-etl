@@ -13,75 +13,185 @@ from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
 
-def _remove_geodatabase_safely(gdb_path):
-    """
-    Safely remove a geodatabase directory, handling lock files and permissions.
+def clear_arcpy_caches():
+    """Clear ArcPy internal caches and reset workspace to avoid locks."""
+    try:
+        # Reset workspace to system temp directory to avoid locks
+        import tempfile
+        temp_dir = tempfile.gettempdir()
 
-    Args:
-        gdb_path (Path): Path to the geodatabase directory
+        # Use setattr to avoid Pylance warnings about dynamic attributes
+        try:
+            setattr(arcpy.env, 'workspace', str(temp_dir))
+        except (AttributeError, TypeError):
+            # If workspace assignment fails, try alternative approach
+            pass
+
+        try:
+            setattr(arcpy.env, 'scratchWorkspace', str(temp_dir))
+        except (AttributeError, TypeError):
+            # If scratchWorkspace assignment fails, continue
+            pass
+
+        # Clear any cached connections
+        try:
+            arcpy.ClearWorkspaceCache_management()
+        except Exception:
+            # ClearWorkspaceCache might not be available in all ArcPy versions
+            pass
+
+        # Force garbage collection
+        import gc
+        gc.collect()
+
+        # Small delay to let Windows release file handles
+        time.sleep(0.5)
+
+    except Exception as e:
+        logging.debug(f"Error clearing ArcPy caches: {e}")
+
+
+def remove_geodatabase_safely(gdb_path):
     """
+    Safely remove a geodatabase directory with ArcPy-aware cleanup.
+    """
+    gdb_path = Path(gdb_path).resolve()
+
+    if not gdb_path.exists():
+        return True
+
+    logging.info(f"Removing geodatabase: {gdb_path}")
+
+    # Step 1: Clear ArcPy caches first
+    clear_arcpy_caches()
+
+    # Step 2: Try ArcPy delete first (handles ArcGIS locks better)
+    try:
+        if arcpy.Exists(str(gdb_path)):
+            logging.debug("Using ArcPy Delete management tool")
+            arcpy.management.Delete(str(gdb_path))
+            if not gdb_path.exists():
+                logging.info("Successfully removed geodatabase using ArcPy")
+                return True
+    except Exception as e:
+        logging.debug(f"ArcPy Delete failed: {e}")
+
+    # Step 3: Try standard filesystem removal with retries
     def handle_remove_readonly(func, path, exc):
-        """
-        Error handler for shutil.rmtree to handle read-only and locked files.
-        """
-        if os.path.exists(path):
-            # Try to make the file writable and remove it
-            try:
-                os.chmod(path, stat.S_IWRITE)
-                func(path)
-            except (OSError, PermissionError):
-                # If it's still locked, log and continue
-                logging.warning(f"Could not remove locked file: {path}")
+        """Error handler for read-only files."""
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except (OSError, PermissionError):
+            pass  # Continue with other strategies
 
-    max_attempts = 3
+    max_attempts = 5
     for attempt in range(max_attempts):
         try:
+            clear_arcpy_caches()  # Clear caches before each attempt
             shutil.rmtree(gdb_path, onerror=handle_remove_readonly)
+
             if not gdb_path.exists():
-                return  # Successfully removed
+                logging.info(f"Successfully removed geodatabase (attempt {attempt + 1})")
+                return True
+
         except Exception as e:
-            logging.warning(f"Attempt {attempt + 1}: Error removing geodatabase {gdb_path}: {e}")
+            logging.debug(f"Attempt {attempt + 1} failed: {e}")
 
-        # If removal failed, try waiting a bit for locks to release
         if attempt < max_attempts - 1:
-            time.sleep(1)
+            wait_time = (attempt + 1) * 0.5  # Increasing delays
+            logging.debug(f"Waiting {wait_time}s before retry...")
+            time.sleep(wait_time)
 
-    # If we get here, direct removal failed. Try rename strategy
+    # Step 4: Try rename strategy as fallback
     try:
-        temp_path = gdb_path.with_suffix(f".{int(time.time())}.bak")
-        gdb_path.rename(temp_path)
-        logging.info(f"Renamed geodatabase to: {temp_path}")
+        clear_arcpy_caches()
+        timestamp = int(time.time())
+        temp_path = gdb_path.with_name(f"{gdb_path.name}.{timestamp}.old")
 
-        # Try to remove the renamed directory
+        logging.debug(f"Attempting to rename to: {temp_path}")
+        gdb_path.rename(temp_path)
+
+        # Try to remove the renamed directory in background
         try:
-            shutil.rmtree(temp_path, onerror=handle_remove_readonly)
-            logging.info("Successfully removed renamed geodatabase")
+            shutil.rmtree(temp_path, ignore_errors=True)
+            if not temp_path.exists():
+                logging.info("Successfully removed renamed geodatabase")
+            else:
+                logging.warning(f"Renamed geodatabase to {temp_path} (manual cleanup needed)")
         except Exception:
-            logging.warning(f"Could not remove {temp_path}, but it's renamed out of the way")
+            logging.warning(f"Geodatabase renamed to {temp_path} (remove manually when possible)")
+
+        return True
 
     except Exception as rename_error:
-        logging.error(f"Could not rename geodatabase: {rename_error}")
-        # As a last resort, try to clear the directory contents
-        try:
-            for item in gdb_path.iterdir():
+        logging.error(f"Rename strategy failed: {rename_error}")
+
+    # Step 5: Final attempt - clear contents only
+    try:
+        clear_arcpy_caches()
+
+        # Remove all contents recursively
+        for item in gdb_path.rglob("*"):
+            if item.is_file():
                 try:
-                    if item.is_file():
-                        item.chmod(stat.S_IWRITE)
-                        item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                except Exception as item_error:
-                    logging.warning(f"Could not remove item {item}: {item_error}")
-            # Try to remove the now-empty directory
+                    item.chmod(stat.S_IWRITE)
+                    item.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # Try to remove empty directories
+        for item in sorted(gdb_path.rglob("*"), key=str, reverse=True):
+            if item.is_dir() and item != gdb_path:
+                try:
+                    item.rmdir()
+                except Exception:
+                    pass
+
+        # Finally try to remove the main directory
+        try:
             gdb_path.rmdir()
-            logging.info("Successfully cleared geodatabase directory contents")
-        except Exception as clear_error:
-            logging.error(f"Final cleanup attempt failed: {clear_error}")
-            raise OSError(f"Could not remove geodatabase {gdb_path}. Manual cleanup may be required.")
+            logging.info("Successfully cleared geodatabase directory")
+            return True
+        except Exception:
+            logging.warning("Geodatabase contents cleared but directory remains")
+            return False  # Contents cleared but directory still exists
+
+    except Exception as final_error:
+        logging.error(f"Final cleanup failed: {final_error}")
+        return False
+
+
+def create_clean_staging_gdb(staging_gdb_path):
+    """Create a fresh staging geodatabase."""
+    staging_path = Path(staging_gdb_path).resolve()
+    staging_dir = staging_path.parent
+    gdb_name = staging_path.name
+
+    # Ensure parent directory exists
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear any ArcPy workspace references
+    clear_arcpy_caches()
+
+    try:
+        logging.info(f"Creating staging geodatabase: {staging_path}")
+        arcpy.management.CreateFileGDB(str(staging_dir), gdb_name)
+
+        if staging_path.exists():
+            logging.info("Staging geodatabase created successfully")
+            return True
+        else:
+            logging.error("Geodatabase creation appeared to succeed but file doesn't exist")
+            return False
+
+    except Exception as e:
+        logging.error(f"Failed to create staging geodatabase: {e}")
+        return False
 
 
 def main():
-    """Run the ETL pipeline with fixed downloader modules."""
+    """Run the ETL pipeline with improved geodatabase management."""
     # Set increased recursion limit to handle deeply nested API responses
     sys.setrecursionlimit(3000)
 
@@ -116,21 +226,18 @@ def main():
 
     ensure_workspaces(cfg)
 
-    # Clean and recreate staging geodatabase if configured
+    # Handle staging geodatabase cleanup and creation
     if cfg.get("cleanup_staging_before_run", False):
         staging_gdb_path = Path(cfg["workspaces"]["staging_gdb"]).resolve()
-        if staging_gdb_path.exists():
-            logging.info(f"Cleaning staging geodatabase: {staging_gdb_path}")
-            _remove_geodatabase_safely(staging_gdb_path)
-            logging.info("Staging geodatabase cleaned")
 
-        # Recreate empty staging geodatabase
-        logging.info(f"Creating new staging geodatabase: {staging_gdb_path}")
-        staging_dir = staging_gdb_path.parent
-        staging_gdb_name = staging_gdb_path.name
+        # Remove existing geodatabase
+        success = remove_geodatabase_safely(staging_gdb_path)
+        if not success:
+            logging.warning("Geodatabase removal had issues, but continuing...")
 
-        arcpy.management.CreateFileGDB(str(staging_dir), staging_gdb_name)
-        logging.info("New staging geodatabase created")
+        # Create fresh geodatabase
+        if not create_clean_staging_gdb(staging_gdb_path):
+            raise SystemExit("Failed to create staging geodatabase")
 
     do_all = not any((args.download, args.process, args.load_sde))
 
@@ -152,7 +259,6 @@ def main():
         from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
 
         # Run each downloader separately
-        # Each module now handles its own source filtering
         download_http.run(filtered_cfg)
         download_atom.run(filtered_cfg)
         download_ogc.run(filtered_cfg)
