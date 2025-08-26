@@ -87,6 +87,9 @@ def process_file_source(source: dict, downloads_dir: Path) -> bool:
             base_url += "/"
 
         layers = source["raw"]["layer_name"]
+        if not layers:
+            log.warning(f"Source '{name}' is a file index but contains no layers to download.")
+            return False
         log.info(f"Source '{name}' is a file index. Found {len(layers)} layers to download.")
         results = []
         file_extension = source.get("file_extension", ".zip")
