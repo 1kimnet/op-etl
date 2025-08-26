@@ -46,10 +46,12 @@ def run(cfg):
     # Filter feature classes to only include successfully processed ones
     if successfully_processed:
         original_count = len(feature_classes)
+        excluded_feature_classes = [fc for fc in feature_classes if fc not in successfully_processed]
         feature_classes = [fc for fc in feature_classes if fc in successfully_processed]
         excluded_count = original_count - len(feature_classes)
         if excluded_count > 0:
             logging.info(f"[LOAD] Excluding {excluded_count} feature classes that were not successfully processed (no regional data)")
+            logging.info(f"[LOAD] Excluded feature classes: {excluded_feature_classes}")
         logging.info(f"[LOAD] Loading {len(feature_classes)} feature classes with regional data")
 
     loaded_count = 0
