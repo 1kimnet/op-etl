@@ -68,7 +68,7 @@ def run(cfg):
         with open(processed_file, 'w') as f:
             json.dump(successfully_processed, f, indent=2)
         logging.info(f"[PROCESS] Saved {len(successfully_processed)} successfully processed feature classes to {processed_file}")
-    except Exception as e:
+    except IOError as e:
         logging.warning(f"[PROCESS] Failed to save processed feature classes list: {e}")
 
     logging.info(f"[PROCESS] Processed {processed_count} feature classes")
