@@ -179,12 +179,9 @@ def download_file(url: str, out_dir: Path, hint: str) -> Path:
 
         except Exception as e:
             log.warning(f"[HTTP] Attempt {attempt}/{max_attempts} failed: {e}")
-                    if attempt < max_attempts:
-                            time.sleep(backoff)
-                            backoff *= 2
+            if attempt < max_attempts:
+                time.sleep(backoff)
+                backoff *= 2
 
-                # If all attempts fail, raise an error
-                raise RuntimeError(f"Download failed after {max_attempts} attempts")
-
-            # If all attempts fail, raise an error
-            raise RuntimeError(f"Failed to download file from {url} after {max_attempts} attempts.")
+    # If all attempts fail, raise an error
+    raise RuntimeError(f"Failed to download file from {url} after {max_attempts} attempts.")
