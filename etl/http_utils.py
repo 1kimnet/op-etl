@@ -1,6 +1,7 @@
 """
 Robust HTTP utilities for OP-ETL pipeline.
-Fixed recursion issues with response header handling.
+Uses urllib as primary HTTP library with requests as fallback for HTTPS when needed.
+Fixed recursion issues by switching away from requests as the primary method.
 """
 
 import json
@@ -56,7 +57,12 @@ class SimpleResponse:
 
 
 class RecursionSafeSession:
-    """A robust, simplified HTTP session that avoids recursion issues."""
+    """A robust, simplified HTTP session that uses urllib as primary and avoids recursion issues.
+    
+    Uses urllib as the primary HTTP library for all requests, with requests as a fallback 
+    for HTTPS requests only when urllib fails. This approach provides better stability 
+    and avoids the maximum recursion depth errors that frequently occur with requests.
+    """
 
     def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
         # Ensure recursion limit is set high enough as a safety net
@@ -68,9 +74,9 @@ class RecursionSafeSession:
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
 
-    def _fallback_get_urllib(self, url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[SimpleResponse]:
-        """Fallback method using urllib instead of requests to avoid recursion issues."""
-        log.info(f"[HTTP] Using urllib fallback for: {url}")
+    def _get_with_urllib(self, url: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> Optional[SimpleResponse]:
+        """Primary method using urllib for all HTTP requests. Renamed from fallback to reflect new primary status."""
+        log.debug(f"[HTTP] Using urllib (primary) for: {url}")
         
         try:
             headers = {
@@ -78,6 +84,16 @@ class RecursionSafeSession:
                 'Accept': 'application/json, text/html, */*',
                 'Accept-Encoding': 'gzip, deflate'
             }
+            
+            # Add any custom headers passed in kwargs
+            if 'headers' in kwargs:
+                headers.update(kwargs['headers'])
+            
+            # Handle params if provided (similar to requests)
+            if 'params' in kwargs and kwargs['params']:
+                from urllib.parse import urlencode
+                param_string = urlencode(kwargs['params'])
+                url = f"{url}?{param_string}" if '?' not in url else f"{url}&{param_string}"
             
             req = urllib.request.Request(url, headers=headers)
             
@@ -98,6 +114,11 @@ class RecursionSafeSession:
                     log.warning(f"[HTTP] Urllib received empty response from {url}")
                     return None
                 
+                # Check content size
+                if len(content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                    log.warning(f"[HTTP] Response too large: {len(content)} bytes")
+                    return None
+                
                 # Extract basic headers
                 safe_headers = {}
                 for header_name, header_value in response.headers.items():
@@ -105,6 +126,8 @@ class RecursionSafeSession:
                 
                 # Ensure content-length is set (update after potential decompression)
                 safe_headers['content-length'] = str(len(content))
+                
+                log.debug(f"[HTTP] Success: {url} ({response.getcode()}, {len(content)} bytes)")
                 
                 return SimpleResponse(
                     status_code=response.getcode() or 200,
@@ -123,152 +146,180 @@ class RecursionSafeSession:
             log.error(f"[HTTP] Urllib unexpected error for {url}: {e}")
             return None
 
-    def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT,
-                 **kwargs) -> Optional[SimpleResponse]:
-        """Perform a safe GET request with retries and return a SimpleResponse."""
-        log.debug(f"[HTTP] Requesting: {url}")
+    def _fallback_get_requests(self, url: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> Optional[SimpleResponse]:
+        """Fallback method using requests for HTTPS requests when urllib fails."""
+        log.info(f"[HTTP] Using requests fallback for HTTPS: {url}")
         
-        # Check recursion safety before starting
-        if not check_recursion_safety():
-            log.warning(f"[HTTP] Recursion depth too high, using urllib fallback for {url}")
-            return self._fallback_get_urllib(url, timeout)
-
-        for attempt in range(self.max_retries + 1):
+        try:
+            # Create session with proper cleanup
+            session = requests.Session()
             try:
-                # Create session with proper cleanup
-                session = requests.Session()
+                session.headers.update({
+                    'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
+                    'Accept': 'application/json, text/html, */*',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'close'
+                })
+
+                # Make request without 'with' statement to avoid context manager issues
+                response = session.get(url, timeout=timeout, stream=True, **kwargs)
+
                 try:
-                    session.headers.update({
-                        'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                        'Accept': 'application/json, text/html, */*',
-                        'Accept-Encoding': 'gzip, deflate',
-                        'Connection': 'close'
-                    })
+                    response.raise_for_status()
 
-                    # Make request without 'with' statement to avoid context manager issues
-                    response = session.get(url, timeout=timeout, stream=True, **kwargs)
-
+                    # Check content length with recursion protection
+                    content_length = None
                     try:
-                        response.raise_for_status()
-
-                        # Check content length with recursion protection
+                        content_length = response.headers.get('content-length')
+                    except RecursionError:
+                        log.warning(f"[HTTP] Recursion error accessing content-length header for {url}")
                         content_length = None
+                    except Exception as e:
+                        log.debug(f"[HTTP] Error accessing content-length: {e}")
+                        content_length = None
+
+                    if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                        log.warning(f"[HTTP] Response too large: {content_length} bytes")
+                        return None
+
+                    # Read content in chunks with recursion protection
+                    content = b''
+                    total_size = 0
+                    try:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                total_size += len(chunk)
+                                if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                                    log.warning(f"[HTTP] Response size exceeded limit: {total_size} bytes")
+                                    return None
+                                content += chunk
+                    except RecursionError:
+                        log.error(f"[HTTP] Recursion error reading response content for {url}")
+                        return None
+
+                    log.debug(f"[HTTP] Success: {url} ({response.status_code}, {len(content)} bytes)")
+
+                    # Extract status code safely
+                    status_code = 200  # Default fallback
+                    try:
+                        status_code = response.status_code
+                    except RecursionError:
+                        log.warning(f"[HTTP] Recursion error accessing status code for {url}")
+                    except Exception:
+                        pass
+
+                    # Extract URL safely
+                    response_url = url  # Fallback to original URL
+                    try:
+                        response_url = response.url
+                    except RecursionError:
+                        log.warning(f"[HTTP] Recursion error accessing response URL for {url}")
+                    except Exception:
+                        pass
+
+                    # Extract headers safely with multiple fallback levels
+                    safe_headers = {}
+                    try:
+                        # First attempt: normal header extraction
+                        for key, value in response.headers.items():
+                            safe_headers[str(key).lower()] = str(value)
+                    except RecursionError:
+                        log.warning(f"[HTTP] Recursion error extracting headers for {url}")
+                        # Fallback: try to get essential headers only
                         try:
-                            content_length = response.headers.get('content-length')
+                            safe_headers = {
+                                'content-type': str(response.headers.get('content-type', 'application/octet-stream')),
+                                'content-length': str(len(content))
+                            }
                         except RecursionError:
-                            log.warning(f"[HTTP] Recursion error accessing content-length header for {url}")
-                            content_length = None
-                        except Exception as e:
-                            log.debug(f"[HTTP] Error accessing content-length: {e}")
-                            content_length = None
-
-                        if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                            log.warning(f"[HTTP] Response too large: {content_length} bytes")
-                            return None
-
-                        # Read content in chunks with recursion protection
-                        content = b''
-                        total_size = 0
-                        try:
-                            for chunk in response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    total_size += len(chunk)
-                                    if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                        log.warning(f"[HTTP] Response size exceeded limit: {total_size} bytes")
-                                        return None
-                                    content += chunk
-                        except RecursionError:
-                            log.error(f"[HTTP] Recursion error reading response content for {url}")
-                            return None
-
-                        log.debug(f"[HTTP] Success: {url} ({response.status_code}, {len(content)} bytes)")
-
-                        # Extract status code safely
-                        status_code = 200  # Default fallback
-                        try:
-                            status_code = response.status_code
-                        except RecursionError:
-                            log.warning(f"[HTTP] Recursion error accessing status code for {url}")
-                        except Exception:
-                            pass
-
-                        # Extract URL safely
-                        response_url = url  # Fallback to original URL
-                        try:
-                            response_url = response.url
-                        except RecursionError:
-                            log.warning(f"[HTTP] Recursion error accessing response URL for {url}")
-                        except Exception:
-                            pass
-
-                        # Extract headers safely with multiple fallback levels
-                        safe_headers = {}
-                        try:
-                            # First attempt: normal header extraction
-                            for key, value in response.headers.items():
-                                safe_headers[str(key)] = str(value)
-                        except RecursionError:
-                            log.warning(f"[HTTP] Recursion error extracting headers for {url}")
-                            # Fallback: try to get essential headers only
-                            try:
-                                safe_headers = {
-                                    'content-type': str(response.headers.get('content-type', 'application/octet-stream')),
-                                    'content-length': str(len(content))
-                                }
-                            except RecursionError:
-                                # Final fallback: minimal headers
-                                safe_headers = {
-                                    'content-type': 'application/octet-stream',
-                                    'content-length': str(len(content))
-                                }
-                        except Exception as e:
-                            log.debug(f"[HTTP] Header extraction warning: {e}")
-                            # Fall back to minimal headers
+                            # Final fallback: minimal headers
                             safe_headers = {
                                 'content-type': 'application/octet-stream',
                                 'content-length': str(len(content))
                             }
+                    except Exception as e:
+                        log.debug(f"[HTTP] Header extraction warning: {e}")
+                        # Fall back to minimal headers
+                        safe_headers = {
+                            'content-type': 'application/octet-stream',
+                            'content-length': str(len(content))
+                        }
 
-                        # Create response object with safe headers
-                        return SimpleResponse(
-                            status_code=status_code,
-                            headers=safe_headers,
-                            content=content,
-                            url=response_url
-                        )
-                    finally:
-                        # Ensure response is closed with recursion protection
-                        try:
-                            response.close()
-                        except RecursionError:
-                            log.debug(f"[HTTP] Recursion error closing response for {url}")
-                        except Exception:
-                            pass
+                    # Create response object with safe headers
+                    return SimpleResponse(
+                        status_code=status_code,
+                        headers=safe_headers,
+                        content=content,
+                        url=response_url
+                    )
                 finally:
-                    # Ensure session is closed with recursion protection
+                    # Ensure response is closed with recursion protection
                     try:
-                        session.close()
+                        response.close()
                     except RecursionError:
-                        log.debug(f"[HTTP] Recursion error closing session for {url}")
+                        log.debug(f"[HTTP] Recursion error closing response for {url}")
                     except Exception:
                         pass
+            finally:
+                # Ensure session is closed with recursion protection
+                try:
+                    session.close()
+                except RecursionError:
+                    log.debug(f"[HTTP] Recursion error closing session for {url}")
+                except Exception:
+                    pass
 
-            except RecursionError as e:
-                log.error(f"[HTTP] Recursion error for {url}: {e}")
-                # For recursion errors, try urllib fallback instead of retrying
-                log.info(f"[HTTP] Attempting urllib fallback for {url}")
-                return self._fallback_get_urllib(url, timeout)
-            except requests.exceptions.RequestException as e:
+        except RecursionError as e:
+            log.error(f"[HTTP] Recursion error in requests fallback for {url}: {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            log.error(f"[HTTP] Requests fallback failed for {url}: {e}")
+            return None
+        except Exception as e:
+            log.error(f"[HTTP] Unexpected error in requests fallback for {url}: {e}")
+            return None
+
+    def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT,
+                 **kwargs) -> Optional[SimpleResponse]:
+        """Perform a safe GET request with retries. Uses urllib as primary, requests as fallback for HTTPS."""
+        log.debug(f"[HTTP] Requesting: {url}")
+        
+        # Check recursion safety before starting
+        if not check_recursion_safety():
+            log.warning(f"[HTTP] Recursion depth too high, using urllib with minimal retries for {url}")
+            return self._get_with_urllib(url, timeout, **kwargs)
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                # PRIMARY: Try urllib first (this is now the main approach)
+                result = self._get_with_urllib(url, timeout, **kwargs)
+                if result:
+                    return result
+                
+                # FALLBACK: Use requests only for HTTPS URLs when urllib fails
+                if url.lower().startswith('https://'):
+                    log.info(f"[HTTP] Urllib failed for HTTPS URL, trying requests fallback: {url}")
+                    result = self._fallback_get_requests(url, timeout, **kwargs)
+                    if result:
+                        return result
+                
+                # If we get here, both methods failed
                 if attempt < self.max_retries:
                     wait_time = self.backoff_factor * (2 ** attempt)
-                    log.debug(f"[HTTP] Attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                    log.debug(f"[HTTP] Attempt {attempt + 1} failed, retrying in {wait_time}s")
                     time.sleep(wait_time)
                 else:
-                    log.error(f"[HTTP] Request failed after {self.max_retries + 1} attempts for {url}: {e}")
+                    log.error(f"[HTTP] All methods failed after {self.max_retries + 1} attempts for {url}")
                     return None
+                    
             except Exception as e:
                 log.error(f"[HTTP] Unexpected error for {url}: {e}")
-                return None
+                if attempt < self.max_retries:
+                    wait_time = self.backoff_factor * (2 ** attempt)
+                    log.debug(f"[HTTP] Retrying in {wait_time}s after error")
+                    time.sleep(wait_time)
+                else:
+                    return None
 
         return None
 
@@ -401,25 +452,21 @@ def safe_xml_parse(content: Union[str, bytes], max_elements: int = 10000) -> Opt
 def download_with_retries(url: str, output_path: Path,
                           max_retries: int = 3,
                           timeout: int = DEFAULT_TIMEOUT) -> bool:
-    """Download a file with retries and safety checks."""
+    """Download a file with retries and safety checks. Uses urllib as primary, requests as fallback for HTTPS."""
     for attempt in range(1, max_retries + 1):
         try:
             log.info(f"[DOWNLOAD] Attempt {attempt}/{max_retries}: {url}")
 
-            # Create a fresh session for each download attempt
-            session = requests.Session()
+            # PRIMARY: Try urllib first (consistent with RecursionSafeSession approach)
             try:
-                session.headers.update({
+                headers = {
                     'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                    'Accept': '*/*',
-                    'Connection': 'close'
-                })
-
-                # Use streaming to handle large files
-                response = session.get(url, stream=True, timeout=timeout)
-                try:
-                    response.raise_for_status()
-
+                    'Accept': '*/*'
+                }
+                
+                req = urllib.request.Request(url, headers=headers)
+                
+                with urllib.request.urlopen(req, timeout=timeout) as response:
                     # Get content length if available
                     content_length = response.headers.get('content-length')
                     if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
@@ -432,30 +479,87 @@ def download_with_retries(url: str, output_path: Path,
                     # Stream directly to file
                     with open(output_path, 'wb') as f:
                         total_size = 0
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                total_size += len(chunk)
-                                if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                    log.warning(f"[DOWNLOAD] Size exceeded limit: {total_size} bytes")
-                                    f.close()
-                                    if output_path.exists():
-                                        try:
-                                            os.unlink(output_path)
-                                        except OSError:
-                                            pass
-                                    return False
-                                f.write(chunk)
-                finally:
-                    response.close()
-            finally:
-                session.close()
+                        while True:
+                            chunk = response.read(8192)
+                            if not chunk:
+                                break
+                            total_size += len(chunk)
+                            if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                                log.warning(f"[DOWNLOAD] Size exceeded limit: {total_size} bytes")
+                                f.close()
+                                if output_path.exists():
+                                    try:
+                                        os.unlink(output_path)
+                                    except OSError:
+                                        pass
+                                return False
+                            f.write(chunk)
 
-            # Verify download
-            if output_path.exists() and output_path.stat().st_size > 0:
-                log.info(f"[DOWNLOAD] Success: {output_path.name} ({output_path.stat().st_size} bytes)")
-                return True
-            else:
-                log.warning("[DOWNLOAD] Downloaded file is empty or missing")
+                # Verify download
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    log.info(f"[DOWNLOAD] Success: {output_path.name} ({output_path.stat().st_size} bytes)")
+                    return True
+                else:
+                    log.warning("[DOWNLOAD] Downloaded file is empty or missing")
+
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                # FALLBACK: Use requests for HTTPS URLs when urllib fails
+                if url.lower().startswith('https://'):
+                    log.info(f"[DOWNLOAD] Urllib failed for HTTPS, trying requests fallback: {e}")
+                    
+                    # Create a fresh session for each download attempt
+                    session = requests.Session()
+                    try:
+                        session.headers.update({
+                            'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
+                            'Accept': '*/*',
+                            'Connection': 'close'
+                        })
+
+                        # Use streaming to handle large files
+                        response = session.get(url, stream=True, timeout=timeout)
+                        try:
+                            response.raise_for_status()
+
+                            # Get content length if available
+                            content_length = response.headers.get('content-length')
+                            if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                                log.warning(f"[DOWNLOAD] File too large: {content_length} bytes")
+                                return False
+
+                            # Create directory if needed
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                            # Stream directly to file
+                            with open(output_path, 'wb') as f:
+                                total_size = 0
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        total_size += len(chunk)
+                                        if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
+                                            log.warning(f"[DOWNLOAD] Size exceeded limit: {total_size} bytes")
+                                            f.close()
+                                            if output_path.exists():
+                                                try:
+                                                    os.unlink(output_path)
+                                                except OSError:
+                                                    pass
+                                            return False
+                                        f.write(chunk)
+                        finally:
+                            response.close()
+                    finally:
+                        session.close()
+
+                    # Verify download
+                    if output_path.exists() and output_path.stat().st_size > 0:
+                        log.info(f"[DOWNLOAD] Success: {output_path.name} ({output_path.stat().st_size} bytes)")
+                        return True
+                    else:
+                        log.warning("[DOWNLOAD] Downloaded file is empty or missing")
+                else:
+                    # Re-raise for non-HTTPS URLs since fallback only applies to HTTPS
+                    raise
 
         except Exception as e:
             log.warning(f"[DOWNLOAD] Attempt {attempt} failed: {e}")

@@ -166,7 +166,7 @@ def download_file(url: str, out_dir: Path, hint: str) -> Path:
 
     for attempt in range(1, max_attempts + 1):
         try:
-            # Simple download using urllib
+            # Use urllib for downloads (consistent with new primary HTTP approach)
             headers = {"User-Agent": "op-etl/1.0"}
             req = urllib.request.Request(url, headers=headers)
 
