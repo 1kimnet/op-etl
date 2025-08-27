@@ -9,9 +9,6 @@ from unittest.mock import Mock, patch, MagicMock
 import sys
 import os
 
-# Add the etl directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from etl.download_rest import download_layer, process_rest_source
 
 
