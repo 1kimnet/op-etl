@@ -351,8 +351,6 @@ def safe_json_parse(content: Union[str, bytes], max_size_mb: int = 50) -> Option
             log.warning(f"[JSON] Content too large: {len(content)} bytes")
             return None
 
-
-
         # Parse with standard library
         try:
             data = json.loads(content)
