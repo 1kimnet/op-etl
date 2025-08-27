@@ -1,6 +1,6 @@
 """
 REST API downloader for OP-ETL pipeline.
-Enhanced implementation with recursion depth protection.
+Enhanced implementation with recursion depth protection and SR consistency.
 """
 
 import json
@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
+from .sr_utils import (
+    SWEREF99_TM, get_sr_config_for_source, 
+    validate_sr_consistency, validate_bbox_vs_envelope,
+    log_sr_validation_summary
+)
 
 log = logging.getLogger(__name__)
 
@@ -271,21 +276,30 @@ def download_layer(
             log.warning(f"[REST] Layer doesn't support queries: {layer_url}")
             return 0
 
-        # Build base query parameters
+        # Get SR configuration for source (enforce best practices)
+        source_info = {"type": "rest", "raw": raw_config}
+        sr_config = get_sr_config_for_source(source_info)
+        
+        # Build base query parameters with enforced SR consistency
         base_params = {
             "f": "geojson",
             "where": raw_config.get("where", "1=1"),
             "outFields": raw_config.get("out_fields", "*"),
             "returnGeometry": "true",
+            # Enforce SR 3006 for REST APIs (best practice)
+            "inSR": sr_config.get("in_sr", SWEREF99_TM),
+            "outSR": sr_config.get("out_sr", SWEREF99_TM),
         }
 
-        # Add bbox if configured (prefer raw, else global)
+        # Add bbox if configured (prefer raw, else global) - express in SR 3006
         bbox = raw_config.get("bbox") or global_bbox
+        bbox_sr = sr_config.get("bbox_sr", SWEREF99_TM)
         if bbox and len(bbox) >= 4:
             base_params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
             base_params["geometryType"] = "esriGeometryEnvelope"
-            in_sr = raw_config.get("bbox_sr") or global_sr or 4326
-            base_params["inSR"] = in_sr
+            base_params["geometrySR"] = bbox_sr
+            
+        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {base_params['outSR']}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
         supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
@@ -297,7 +311,7 @@ def download_layer(
 
         try:
             all_features, request_count = _download_with_offset_pagination(
-                session, layer_url, base_params, layer_name
+                session, layer_url, base_params, layer_name, sr_config, bbox
             )
         except TransferLimitExceededError:
             if supports_oids:
@@ -335,7 +349,9 @@ def _download_with_offset_pagination(
     session: RecursionSafeSession,
     layer_url: str,
     base_params: Dict,
-    layer_name: str
+    layer_name: str,
+    sr_config: Dict,
+    bbox: Optional[List[float]]
 ) -> Tuple[List[Dict], int]:
     """Download features using offset-based pagination with transfer limit detection."""
     all_features = []
@@ -370,6 +386,19 @@ def _download_with_offset_pagination(
         if not data:
             log.warning(f"[REST] Failed to parse query response for {layer_name} at offset {offset}")
             break
+
+        # Validate SR consistency on first page
+        if offset == 0:
+            expected_sr = sr_config.get("out_sr", SWEREF99_TM)
+            sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
+            if not sr_valid:
+                log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
+            
+            # Validate bbox vs envelope if applicable
+            if bbox and 'extent' in data:
+                bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
+                if not bbox_valid:
+                    log.warning("Bbox validation failed")
 
         # Check for transfer limit exceeded
         exceeded_transfer_limit = data.get("exceededTransferLimit", False)

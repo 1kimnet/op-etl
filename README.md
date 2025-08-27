@@ -13,20 +13,38 @@ OP-ETL is a lightweight ETL pipeline for geospatial data in Esri environments. I
 - **Native Esri format staging** — FileGDB staging ensures smooth ArcPy processing
 - **Optional geoprocessing** — clip to AOI, reproject to target SRID
 - **Simple SDE load** — truncate-and-load workflow to SQL Server (or other supported RDBMS)
+- **Spatial Reference Consistency** — enforced SR handling with SWEREF99 TM (EPSG:3006) target
 
 ## Basic Workflow
 
 ```mermaid
 flowchart LR
-    A[Download Sources] --> B[Stage in FGDB]
+    A[Download Sources] --> B[Stage in FGDB] 
     B --> C[Optional Geoprocessing]
     C --> D[Load to SDE]
+    
+    A --> E[SR Validation]
+    E --> B
+    B --> F[Project to SWEREF99 TM]
+    F --> C
 ```
 
-1. **Download**: Fetch data from HTTP, REST, or OGC sources
-2. **Stage**: Store datasets in a local FileGDB
-3. **Process** (optional): Clip to AOI and/or reproject
-4. **Load**: Push processed data into ArcSDE
+1. **Download**: Fetch data from HTTP, REST, or OGC sources with SR consistency
+2. **Validate**: Check coordinate magnitudes and spatial reference integrity  
+3. **Stage**: Store datasets in FileGDB with proper SR (EPSG:3006)
+4. **Process** (optional): Clip to AOI and/or reproject
+5. **Load**: Push processed data into ArcSDE
+
+## Spatial Reference Handling
+
+The pipeline enforces consistent spatial reference handling:
+
+- **REST APIs**: Use SWEREF99 TM (EPSG:3006) for bbox, inSR, and outSR
+- **OGC APIs**: Default to CRS84, support EPSG:3006 when available
+- **Staging**: All feature classes have defined SR, project to SWEREF99 TM
+- **Validation**: Coordinate magnitude checks, no "Unknown" SR allowed
+
+See [Spatial Reference Consistency Documentation](docs/spatial-reference-consistency.md) for details.
 
 ## Requirements
 
