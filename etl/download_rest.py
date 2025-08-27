@@ -495,6 +495,7 @@ def download_layer(
                 )
             except TransferLimitExceededError:
                 log.warning(f"[REST] {layer_name}: offset pagination failed with transfer limits and OID pagination not supported")
+
         else:
             # Default behavior: try offset-based pagination first, fall back to sequential OID-based if transfer limits hit
             try:
@@ -559,7 +560,8 @@ def _download_with_offset_pagination(
         params["resultOffset"] = offset
         query_url = f"{layer_url}/query"
 
-        response = session.safe_get(query_url, params=params, timeout=60)
+        # CHANGED: Use helper that picks POST for long params
+        response = _safe_query_request(session, query_url, params, timeout=60)
         request_count += 1
 
         if not response:
@@ -629,7 +631,8 @@ def _download_with_oid_pagination(
     })
 
     query_url = f"{layer_url}/query"
-    response = session.safe_get(query_url, params=oid_params, timeout=60)
+    # CHANGED: Use helper that picks POST for long params (IDs request)
+    response = _safe_query_request(session, query_url, oid_params, timeout=60)
     request_count = 1
 
     if not response or not validate_response_content(response):
@@ -668,7 +671,8 @@ def _download_with_oid_pagination(
         else:
             feature_params["where"] = oid_where
 
-        response = session.safe_get(query_url, params=feature_params, timeout=60)
+        # CHANGED: Use helper that picks POST for long params (features by OID batch)
+        response = _safe_query_request(session, query_url, feature_params, timeout=60)
         request_count += 1
 
         if not response or not validate_response_content(response):
@@ -707,7 +711,8 @@ def _rest_get_all_oids(
     })
 
     query_url = f"{layer_url}/query"
-    response = session.safe_get(query_url, params=oid_params, timeout=60)
+    # CHANGED: Use helper that picks POST for long params
+    response = _safe_query_request(session, query_url, oid_params, timeout=60)
     request_count = 1
 
     if not response or not validate_response_content(response):
@@ -729,10 +734,9 @@ def _rest_get_all_oids(
 
     # Sort OIDs ascending as required
     sorted_oids = sorted(object_ids)
-    
+
     log.info(f"[REST] {layer_name}: discovered {len(sorted_oids)} object IDs (field: {oid_field})")
     return oid_field, sorted_oids, request_count
-
 
 def _rest_fetch_oid_batch(
     session: RecursionSafeSession,
@@ -766,43 +770,16 @@ def _rest_fetch_oid_batch(
 
     query_url = f"{layer_url}/query"
 
-    # Check if we need to use POST due to URL length
-    import urllib.parse
-    encoded_params = urllib.parse.urlencode(feature_params)
-    use_post = len(encoded_params) > 7000  # Use POST if params exceed ~7k chars
-
-    # Handle potential retry after
+    # Remove old GET/POST toggle and always use the helper with retries
     retry_count = 0
 
     while retry_count <= max_retries:
-        if use_post:
-            # Use POST with application/x-www-form-urlencoded
-            try:
-                headers = {"Content-Type": "application/x-www-form-urlencoded"}
-                # Use the underlying PoolManager directly for POST
-                r = session._client._http.request(
-                    "POST", query_url, 
-                    body=encoded_params.encode('utf-8'),
-                    headers=headers,
-                    timeout=session._client._timeout
-                )
-                # Convert to SimpleResponse format
-                response = type('SimpleResponse', (), {
-                    'status_code': r.status,
-                    'headers': dict(r.headers),
-                    'content': r.data,
-                    'url': query_url
-                })()
-            except Exception as e:
-                log.warning(f"[REST] {layer_name} batch {batch_idx}: POST request failed: {e}")
-                response = None
-        else:
-            response = session.safe_get(query_url, params=feature_params, timeout=60)
+        response = _safe_query_request(session, query_url, feature_params, timeout=60)
 
         if not response or not validate_response_content(response):
             retry_count += 1
             if retry_count <= max_retries:
-                wait_time = 2 ** retry_count  # Exponential backoff
+                wait_time = 2 ** retry_count
                 log.debug(f"[REST] {layer_name} batch {batch_idx}: retry {retry_count} after {wait_time}s")
                 time.sleep(wait_time)
                 continue
@@ -883,7 +860,6 @@ def fetch_rest_layer_parallel(
     # Step 3: Fetch batches in parallel
     all_features = []
     completed_batches = []
-
     # Use conservative max_workers to avoid overwhelming the server
     actual_max_workers = min(max_workers, MAX_CONCURRENT_REQUESTS)  # Hard cap at MAX_CONCURRENT_REQUESTS concurrent requests
 
@@ -908,11 +884,11 @@ def fetch_rest_layer_parallel(
                     metrics["batches_ok"] += 1
                     if features:
                         completed_batches.append((batch_idx, features))
-                        
+
                     # Progress logging every 20 batches
                     if metrics["batches_ok"] % 20 == 0:
                         log.info(f"[REST] {layer_name}: completed batch {metrics['batches_ok']}/{metrics['batches_total']}")
-                        
+
                 else:
                     log.warning(f"[REST] {layer_name}: failed batch {batch_idx}")
 
@@ -922,7 +898,7 @@ def fetch_rest_layer_parallel(
     # Step 4: Merge, dedupe, and order
     # Sort completed batches by batch_idx to maintain OID order
     completed_batches.sort(key=lambda x: x[0])
-    
+
     # Merge features and deduplicate by OID
     seen_oids = set()
     for batch_idx, features in completed_batches:
@@ -933,19 +909,34 @@ def fetch_rest_layer_parallel(
                 feature_oid = feature["attributes"].get(oid_field)
             elif "properties" in feature:
                 feature_oid = feature["properties"].get(oid_field)
-            
+
             # Add if not seen before (optional deduplication)
             if feature_oid is None or feature_oid not in seen_oids:
                 all_features.append(feature)
                 if feature_oid is not None:
                     seen_oids.add(feature_oid)
-                    
+
     metrics["features_total"] = len(all_features)
 
     log.info(f"[REST] {layer_name}: parallel fetch completed - {metrics['batches_ok']}/{metrics['batches_total']} batches successful, {metrics['features_total']} total features in {metrics['request_count']} requests")
 
     return all_features, metrics
 
+# Prefer POST for very long query strings to avoid 414 (URI Too Long)
+_URL_LENGTH_POST_THRESHOLD = 7000
+
+def _safe_query_request(session: RecursionSafeSession, url: str, params: Dict[str, Any], timeout: int = 60):
+    """Use GET for all requests. Log warning for very long query strings."""
+    try:
+        import urllib.parse
+        encoded = urllib.parse.urlencode(params)
+        if len(encoded) > _URL_LENGTH_POST_THRESHOLD:
+            log.warning(f"[REST] Long query string ({len(encoded)} chars) may cause issues with some servers")
+
+        return session.safe_get(url, params=params, timeout=timeout)
+    except Exception as e:
+        log.debug(f"[REST] _safe_query_request failed: {e}")
+        return session.safe_get(url, params=params, timeout=timeout)
 
 def coerce_bbox4(bbox: Optional[Sequence[float]]) -> Optional[BBox]:
     """Ensure bbox is exactly 4 numbers (xmin, ymin, xmax, ymax)."""
@@ -954,6 +945,10 @@ def coerce_bbox4(bbox: Optional[Sequence[float]]) -> Optional[BBox]:
     if len(bbox) != 4:
         raise ValueError(f"bbox must have 4 elements [xmin, ymin, xmax, ymax], got {len(bbox)}")
     xmin = float(bbox[0])
+    ymin = float(bbox[1])
+    xmax = float(bbox[2])
+    ymax = float(bbox[3])
+    return (xmin, ymin, xmax, ymax)
     ymin = float(bbox[1])
     xmax = float(bbox[2])
     ymax = float(bbox[3])
