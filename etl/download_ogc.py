@@ -230,7 +230,6 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     }
 
     bbox = raw.get("bbox") or global_bbox
-    bbox_crs = sr_config.get("bbox_crs", CRS84)
     
     if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox[:4])

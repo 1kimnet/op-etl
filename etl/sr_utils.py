@@ -3,9 +3,7 @@ Spatial Reference (SR) utilities for ETL pipeline.
 Provides validation, sanity checks, and consistency enforcement.
 """
 import logging
-from typing import Optional, List, Dict, Any, Tuple, Union
-import json
-from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -31,22 +29,34 @@ def validate_coordinates_magnitude(coords: List[float], expected_sr: int) -> boo
     x, y = coords[0], coords[1]
     
     if expected_sr == SWEREF99_TM:
-        # SWEREF99 TM (EPSG:3006) - should be in meters
-        # Rough bounds for Sweden: X: 200000-900000, Y: 6100000-7700000
-        if not (200000 <= x <= 900000 and 6100000 <= y <= 7700000):
-            log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
-            return False
-            
+        return _validate_sweref99_bounds(x, y)
     elif expected_sr == WGS84_DD:
-        # WGS84 - should be in degrees
-        # Sweden roughly: Lon: 10-25, Lat: 55-70
-        if not (-180 <= x <= 180 and -90 <= y <= 90):
-            log.warning(f"Coordinates {x}, {y} outside valid WGS84 degree bounds")
-            return False
-        # More specific check for Sweden
-        if not (10 <= x <= 25 and 55 <= y <= 70):
-            log.warning(f"Coordinates {x}, {y} outside expected Sweden WGS84 bounds")
-            
+        return _validate_wgs84_bounds(x, y)
+        
+    return True
+
+
+def _validate_sweref99_bounds(x: float, y: float) -> bool:
+    """Validate SWEREF99 TM coordinate bounds."""
+    # SWEREF99 TM (EPSG:3006) - should be in meters
+    # Rough bounds for Sweden: X: 200000-900000, Y: 6100000-7700000
+    if not (200000 <= x <= 900000 and 6100000 <= y <= 7700000):
+        log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
+        return False
+    return True
+
+
+def _validate_wgs84_bounds(x: float, y: float) -> bool:
+    """Validate WGS84 coordinate bounds."""
+    # WGS84 - should be in degrees
+    # Sweden roughly: Lon: 10-25, Lat: 55-70
+    if not (-180 <= x <= 180 and -90 <= y <= 90):
+        log.warning(f"Coordinates {x}, {y} outside valid WGS84 degree bounds")
+        return False
+    # More specific check for Sweden
+    if not (10 <= x <= 25 and 55 <= y <= 70):
+        log.warning(f"Coordinates {x}, {y} outside expected Sweden WGS84 bounds")
+        
     return True
 
 def validate_bbox_vs_envelope(bbox: List[float], envelope: Dict[str, float], 
@@ -65,15 +75,27 @@ def validate_bbox_vs_envelope(bbox: List[float], envelope: Dict[str, float],
     if not bbox or len(bbox) < 4:
         return True  # No bbox to compare
         
+    if not _validate_envelope_structure(envelope):
+        return False
+        
+    req_coords = bbox[:4]
+    resp_coords = [envelope['xmin'], envelope['ymin'], envelope['xmax'], envelope['ymax']]
+    
+    return _check_coordinate_tolerance(req_coords, resp_coords, tolerance)
+
+
+def _validate_envelope_structure(envelope: Dict[str, float]) -> bool:
+    """Validate envelope has required fields."""
     if not envelope or not all(k in envelope for k in ['xmin', 'ymin', 'xmax', 'ymax']):
         log.warning("Response envelope missing required fields")
         return False
-        
-    req_xmin, req_ymin, req_xmax, req_ymax = bbox[:4]
-    resp_xmin = envelope['xmin']
-    resp_ymin = envelope['ymin']
-    resp_xmax = envelope['xmax']
-    resp_ymax = envelope['ymax']
+    return True
+
+
+def _check_coordinate_tolerance(req_coords: List[float], resp_coords: List[float], tolerance: float) -> bool:
+    """Check if response coordinates are within tolerance of requested coordinates."""
+    req_xmin, req_ymin, req_xmax, req_ymax = req_coords
+    resp_xmin, resp_ymin, resp_xmax, resp_ymax = resp_coords
     
     # Calculate width/height for tolerance
     req_width = abs(req_xmax - req_xmin)
@@ -87,7 +109,8 @@ def validate_bbox_vs_envelope(bbox: List[float], envelope: Dict[str, float],
         abs(resp_ymin - req_ymin) > y_tolerance or
         abs(resp_xmax - req_xmax) > x_tolerance or
         abs(resp_ymax - req_ymax) > y_tolerance):
-        log.warning(f"Response envelope {envelope} differs significantly from bbox {bbox}")
+        envelope_dict = {'xmin': resp_xmin, 'ymin': resp_ymin, 'xmax': resp_xmax, 'ymax': resp_ymax}
+        log.warning(f"Response envelope {envelope_dict} differs significantly from bbox {req_coords}")
         return False
         
     return True
@@ -150,62 +173,75 @@ def detect_sr_from_geojson(geojson_data: Dict[str, Any]) -> Optional[int]:
                 
     return None
 
- def validate_sr_consistency(data: Dict[str, Any], expected_sr: Optional[int]) -> Tuple[bool, Optional[int]]:
-     """
-     Validate spatial reference consistency in response data.
-     
-     Args:
-         data: Response data (GeoJSON or ArcGIS REST response)
-         expected_sr: Expected EPSG code
-         
-     Returns:
-         Tuple of (is_valid, detected_sr)
-     """
-     detected_sr = None
-     
-     # For GeoJSON
-     if data.get('type') == 'FeatureCollection':
-         detected_sr = detect_sr_from_geojson(data)
-         features = data.get('features', [])
-         
-         # Validate coordinate magnitudes for first feature
-         if features and expected_sr:
-             first_feature = features[0]
-             geometry = first_feature.get('geometry', {})
-             coordinates = geometry.get('coordinates')
-             if coordinates:
--                # Get first coordinate pair
--                flat_coords = _flatten_coordinates(coordinates)
--                if flat_coords and len(flat_coords) >= 2:
--                    if not validate_coordinates_magnitude(flat_coords[:2], expected_sr):
-                flat_coords = _flatten_coordinates(coordinates)
-                if flat_coords and len(flat_coords) >= 2:
-                    # If SR not declared, infer from magnitudes
-                    if detected_sr is None:
-                        inferred = _infer_sr_from_coords(flat_coords[:2])
-                        if inferred is not None:
-                            detected_sr = inferred
-                    if expected_sr and not validate_coordinates_magnitude(flat_coords[:2], expected_sr):
-                        return False, detected_sr
-                         
-     # For ArcGIS REST response
-     elif 'spatialReference' in data:
-         sr_info = data['spatialReference']
-         if isinstance(sr_info, dict) and 'wkid' in sr_info:
-             detected_sr = sr_info['wkid']
-             
-     # Check consistency
-     if expected_sr and detected_sr and expected_sr != detected_sr:
-         log.warning(f"SR mismatch: expected {expected_sr}, detected {detected_sr}")
-         return False, detected_sr
-         
-     # Check for unknown SR
-     if detected_sr is None:
-         log.warning("Unknown spatial reference detected")
-         return False, None
-         
-     return True, detected_sr
- 
+def validate_sr_consistency(data: Dict[str, Any], expected_sr: Optional[int]) -> Tuple[bool, Optional[int]]:
+    """
+    Validate spatial reference consistency in response data.
+    
+    Args:
+        data: Response data (GeoJSON or ArcGIS REST response)
+        expected_sr: Expected EPSG code
+        
+    Returns:
+        Tuple of (is_valid, detected_sr)
+    """
+    detected_sr = _detect_sr_from_data(data)
+    
+    # Validate coordinate magnitudes if we have features and expected SR
+    if data.get('type') == 'FeatureCollection' and expected_sr:
+        coord_valid = _validate_feature_coordinates(data, expected_sr)
+        if not coord_valid:
+            return False, detected_sr
+    
+    # Check consistency between expected and detected SR
+    return _check_sr_consistency(expected_sr, detected_sr)
+
+
+def _detect_sr_from_data(data: Dict[str, Any]) -> Optional[int]:
+    """Detect spatial reference from data."""
+    if data.get('type') == 'FeatureCollection':
+        return detect_sr_from_geojson(data)
+    elif 'spatialReference' in data:
+        sr_info = data['spatialReference']
+        if isinstance(sr_info, dict) and 'wkid' in sr_info:
+            return sr_info['wkid']
+    return None
+
+
+def _validate_feature_coordinates(data: Dict[str, Any], expected_sr: int) -> bool:
+    """Validate coordinates in first feature of FeatureCollection."""
+    features = data.get('features', [])
+    if not features:
+        return True
+        
+    first_feature = features[0]
+    geometry = first_feature.get('geometry', {})
+    coordinates = geometry.get('coordinates')
+    
+    if not coordinates:
+        return True
+        
+    flat_coords = _flatten_coordinates(coordinates)
+    if flat_coords and len(flat_coords) >= 2:
+        return validate_coordinates_magnitude(flat_coords[:2], expected_sr)
+    
+    return True
+
+
+def _check_sr_consistency(expected_sr: Optional[int], detected_sr: Optional[int]) -> Tuple[bool, Optional[int]]:
+    """Check consistency between expected and detected spatial reference."""
+    # Check for unknown SR
+    if detected_sr is None:
+        log.warning("Unknown spatial reference detected")
+        return False, None
+    
+    # Check consistency
+    if expected_sr and detected_sr and expected_sr != detected_sr:
+        log.warning(f"SR mismatch: expected {expected_sr}, detected {detected_sr}")
+        return False, detected_sr
+        
+    return True, detected_sr
+
+
 def _infer_sr_from_coords(xy: List[float]) -> Optional[int]:
     """
     Best-effort SR inference from a single [x, y] pair.
@@ -219,6 +255,7 @@ def _infer_sr_from_coords(xy: List[float]) -> Optional[int]:
     if 200000 <= x <= 900000 and 6100000 <= y <= 7700000:
         return SWEREF99_TM
     return None
+
 
 def _flatten_coordinates(coords) -> List[float]:
     """Helper to flatten nested coordinate arrays to get first coordinate pair."""

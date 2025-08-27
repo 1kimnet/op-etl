@@ -6,12 +6,25 @@ import logging
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Optional
 
 import arcpy
 
 from .utils import make_arcpy_safe_name
 from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
+
+
+def _flatten_coordinates(coords):
+    """Flatten nested coordinate arrays to a flat list of numbers."""
+    if not coords:
+        return []
+    
+    flat = []
+    for item in coords:
+        if isinstance(item, (list, tuple)):
+            flat.extend(_flatten_coordinates(item))
+        else:
+            flat.append(item)
+    return flat
 
 
 def stage_all_downloads(cfg: dict) -> None:

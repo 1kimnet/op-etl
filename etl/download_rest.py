@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
-    SWEREF99_TM, WGS84_DD, get_sr_config_for_source, 
+    SWEREF99_TM, get_sr_config_for_source, 
     validate_sr_consistency, validate_bbox_vs_envelope,
     log_sr_validation_summary
 )
@@ -333,7 +333,7 @@ def download_layer(
                 if bbox and 'extent' in data:
                     bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
                     if not bbox_valid:
-                        log.warning(f"[REST] Bbox validation failed")
+                        log.warning("Bbox validation failed")
 
             features = data.get("features", [])
 
@@ -341,7 +341,7 @@ def download_layer(
                 # Check if we hit transfer limit
                 exceeded_limit = data.get("exceededTransferLimit", False)
                 if exceeded_limit and offset == 0:
-                    log.warning(f"[REST] Transfer limit exceeded on first page")
+                    log.warning("Transfer limit exceeded on first page")
                 break
 
             all_features.extend(features)
