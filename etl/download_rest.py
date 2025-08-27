@@ -477,7 +477,7 @@ def download_layer(
             # Use parallel OID-based pagination when explicitly requested
             log.info(f"[REST] {layer_name}: using parallel OID sweep (use_oid_sweep=true)")
             all_features, metrics = fetch_rest_layer_parallel(
-                session, layer_url, base_params, layer_name, page_size, max_workers
+                session, layer_url, base_params, layer_name, page_size, max_workers, fmt
             )
             request_count = metrics.get("request_count", 0)
 
@@ -693,15 +693,10 @@ def _download_with_oid_pagination(
 def _rest_get_all_oids(
     session: RecursionSafeSession,
     layer_url: str,
-    base_params: Dict,
+    base_params: Dict[str, Any],
     layer_name: str
-) -> Tuple[List[int], str, int]:
-    """
-    Get all object IDs from a REST layer.
-
-    Returns:
-        Tuple of (object_ids, oid_field_name, request_count)
-    """
+) -> Tuple[str, List[int], int]:
+    """Return (oid_field, sorted_object_ids, request_count)."""
     log.debug(f"[REST] {layer_name}: discovering object IDs")
 
     # Get all object IDs
@@ -717,36 +712,40 @@ def _rest_get_all_oids(
 
     if not response or not validate_response_content(response):
         log.warning(f"[REST] {layer_name}: failed to get object IDs")
-        return [], "OBJECTID", request_count
+        return "OBJECTID", [], request_count
 
     oid_data = safe_json_parse(response.content)
     if not oid_data:
         log.warning(f"[REST] {layer_name}: failed to parse object IDs response")
-        return [], "OBJECTID", request_count
+        return "OBJECTID", [], request_count
 
     # Extract object IDs and field name
     object_ids = oid_data.get("objectIds", [])
     oid_field = oid_data.get("objectIdFieldName", "OBJECTID")
 
-    log.info(f"[REST] {layer_name}: discovered {len(object_ids)} object IDs (field: {oid_field})")
-    return object_ids, oid_field, request_count
+    if not object_ids:
+        log.info(f"[REST] {layer_name}: no object IDs found")
+        return oid_field, [], request_count
+
+    # Sort OIDs ascending as required
+    sorted_oids = sorted(object_ids)
+    
+    log.info(f"[REST] {layer_name}: discovered {len(sorted_oids)} object IDs (field: {oid_field})")
+    return oid_field, sorted_oids, request_count
 
 
 def _rest_fetch_oid_batch(
     session: RecursionSafeSession,
     layer_url: str,
-    base_params: Dict,
+    base_params: Dict[str, Any],
     oid_field: str,
     batch_ids: List[int],
-    batch_num: int,
-    layer_name: str
-) -> Tuple[List[Dict], bool, int]:
-    """
-    Fetch a single batch of features by object IDs.
-
-    Returns:
-        Tuple of (features, success, request_count)
-    """
+    batch_idx: int,
+    layer_name: str,
+    response_format: str,
+    max_retries: int = 3
+) -> Tuple[List[Dict[str, Any]], bool, int]:
+    """Return (features, ok, requests_used)."""
     # Build OID WHERE clause
     oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
 
@@ -760,24 +759,55 @@ def _rest_fetch_oid_batch(
     else:
         feature_params["where"] = oid_where
 
+    # Set orderByFields for consistent ordering
+    feature_params["orderByFields"] = f"{oid_field} ASC"
+    feature_params["returnGeometry"] = "true"
+    feature_params["outFields"] = "*"
+
     query_url = f"{layer_url}/query"
+
+    # Check if we need to use POST due to URL length
+    import urllib.parse
+    encoded_params = urllib.parse.urlencode(feature_params)
+    use_post = len(encoded_params) > 7000  # Use POST if params exceed ~7k chars
 
     # Handle potential retry after
     retry_count = 0
-    max_retries = 3
 
     while retry_count <= max_retries:
-        response = session.safe_get(query_url, params=feature_params, timeout=60)
+        if use_post:
+            # Use POST with application/x-www-form-urlencoded
+            try:
+                headers = {"Content-Type": "application/x-www-form-urlencoded"}
+                # Use the underlying PoolManager directly for POST
+                r = session._client._http.request(
+                    "POST", query_url, 
+                    body=encoded_params.encode('utf-8'),
+                    headers=headers,
+                    timeout=session._client._timeout
+                )
+                # Convert to SimpleResponse format
+                response = type('SimpleResponse', (), {
+                    'status_code': r.status,
+                    'headers': dict(r.headers),
+                    'content': r.data,
+                    'url': query_url
+                })()
+            except Exception as e:
+                log.warning(f"[REST] {layer_name} batch {batch_idx}: POST request failed: {e}")
+                response = None
+        else:
+            response = session.safe_get(query_url, params=feature_params, timeout=60)
 
         if not response or not validate_response_content(response):
             retry_count += 1
             if retry_count <= max_retries:
                 wait_time = 2 ** retry_count  # Exponential backoff
-                log.debug(f"[REST] {layer_name} batch {batch_num}: retry {retry_count} after {wait_time}s")
+                log.debug(f"[REST] {layer_name} batch {batch_idx}: retry {retry_count} after {wait_time}s")
                 time.sleep(wait_time)
                 continue
             else:
-                log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_num} after {max_retries} retries")
+                log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_idx} after {max_retries} retries")
                 return [], False, retry_count
 
         # Check for Retry-After header (server back-pressure)
@@ -787,7 +817,7 @@ def _rest_fetch_oid_batch(
                 if retry_after is not None:
                     wait_time = int(retry_after)
                     if wait_time > 0 and wait_time <= MAX_RETRY_AFTER_SECONDS:  # Reasonable limit
-                        log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
+                        log.info(f"[REST] {layer_name} batch {batch_idx}: server requested {wait_time}s delay")
                         time.sleep(wait_time)
             except (ValueError, TypeError):
                 pass  # Invalid Retry-After value, ignore
@@ -797,15 +827,15 @@ def _rest_fetch_oid_batch(
             retry_count += 1
             if retry_count <= max_retries:
                 wait_time = 2 ** retry_count
-                log.debug(f"[REST] {layer_name} batch {batch_num}: parse error, retry {retry_count} after {wait_time}s")
+                log.debug(f"[REST] {layer_name} batch {batch_idx}: parse error, retry {retry_count} after {wait_time}s")
                 time.sleep(wait_time)
                 continue
             else:
-                log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_num}")
+                log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_idx}")
                 return [], False, retry_count
 
         features = data.get("features", [])
-        log.debug(f"[REST] {layer_name} batch {batch_num}: {len(features)} features")
+        log.debug(f"[REST] {layer_name} batch {batch_idx}: {len(features)} features")
         return features, True, retry_count + 1
 
     return [], False, retry_count
@@ -814,17 +844,13 @@ def _rest_fetch_oid_batch(
 def fetch_rest_layer_parallel(
     session: RecursionSafeSession,
     layer_url: str,
-    base_params: Dict,
+    base_params: Dict[str, Any],
     layer_name: str,
-    page_size: int = 1000,
-    max_workers: int = 6
-) -> Tuple[List[Dict], Dict[str, int]]:
-    """
-    Download features using parallel OID-based pagination.
-
-    Returns:
-        Tuple of (all_features, metrics_dict)
-    """
+    page_size: int,
+    max_workers: int,
+    response_format: str
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """Return (features_merged, metrics)."""
     log.info(f"[REST] {layer_name}: using parallel OID-based pagination (page_size={page_size}, max_workers={max_workers})")
 
     # Initialize metrics
@@ -837,7 +863,7 @@ def fetch_rest_layer_parallel(
     }
 
     # Step 1: Get all object IDs
-    object_ids, oid_field, request_count = _rest_get_all_oids(session, layer_url, base_params, layer_name)
+    oid_field, object_ids, request_count = _rest_get_all_oids(session, layer_url, base_params, layer_name)
     metrics["request_count"] += request_count
     metrics["oids_total"] = len(object_ids)
 
@@ -849,13 +875,14 @@ def fetch_rest_layer_parallel(
     batches = []
     for i in range(0, len(object_ids), page_size):
         batch_ids = object_ids[i:i + page_size]
-        batches.append((batch_ids, i // page_size + 1))
+        batches.append((batch_ids, i // page_size))  # Use batch index instead of batch number
 
     metrics["batches_total"] = len(batches)
     log.info(f"[REST] {layer_name}: created {len(batches)} batches, fetching with {max_workers} workers")
 
     # Step 3: Fetch batches in parallel
     all_features = []
+    completed_batches = []
 
     # Use conservative max_workers to avoid overwhelming the server
     actual_max_workers = min(max_workers, MAX_CONCURRENT_REQUESTS)  # Hard cap at MAX_CONCURRENT_REQUESTS concurrent requests
@@ -863,16 +890,16 @@ def fetch_rest_layer_parallel(
     with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
         # Submit all batch fetch tasks
         future_to_batch = {}
-        for batch_ids, batch_num in batches:
+        for batch_ids, batch_idx in batches:
             future = executor.submit(
                 _rest_fetch_oid_batch,
-                session, layer_url, base_params, oid_field, batch_ids, batch_num, layer_name
+                session, layer_url, base_params, oid_field, batch_ids, batch_idx, layer_name, response_format
             )
-            future_to_batch[future] = batch_num
+            future_to_batch[future] = batch_idx
 
         # Collect results as they complete
         for future in as_completed(future_to_batch):
-            batch_num = future_to_batch[future]
+            batch_idx = future_to_batch[future]
             try:
                 features, success, batch_request_count = future.result()
                 metrics["request_count"] += batch_request_count
@@ -880,14 +907,40 @@ def fetch_rest_layer_parallel(
                 if success:
                     metrics["batches_ok"] += 1
                     if features:
-                        all_features.extend(features)
-                        metrics["features_total"] += len(features)
-                        log.debug(f"[REST] {layer_name}: completed batch {batch_num} with {len(features)} features")
+                        completed_batches.append((batch_idx, features))
+                        
+                    # Progress logging every 20 batches
+                    if metrics["batches_ok"] % 20 == 0:
+                        log.info(f"[REST] {layer_name}: completed batch {metrics['batches_ok']}/{metrics['batches_total']}")
+                        
                 else:
-                    log.warning(f"[REST] {layer_name}: failed batch {batch_num}")
+                    log.warning(f"[REST] {layer_name}: failed batch {batch_idx}")
 
             except Exception as e:
-                log.error(f"[REST] {layer_name}: batch {batch_num} raised exception: {e}")
+                log.error(f"[REST] {layer_name}: batch {batch_idx} raised exception: {e}")
+
+    # Step 4: Merge, dedupe, and order
+    # Sort completed batches by batch_idx to maintain OID order
+    completed_batches.sort(key=lambda x: x[0])
+    
+    # Merge features and deduplicate by OID
+    seen_oids = set()
+    for batch_idx, features in completed_batches:
+        for feature in features:
+            # Extract OID for deduplication
+            feature_oid = None
+            if "attributes" in feature:
+                feature_oid = feature["attributes"].get(oid_field)
+            elif "properties" in feature:
+                feature_oid = feature["properties"].get(oid_field)
+            
+            # Add if not seen before (optional deduplication)
+            if feature_oid is None or feature_oid not in seen_oids:
+                all_features.append(feature)
+                if feature_oid is not None:
+                    seen_oids.add(feature_oid)
+                    
+    metrics["features_total"] = len(all_features)
 
     log.info(f"[REST] {layer_name}: parallel fetch completed - {metrics['batches_ok']}/{metrics['batches_total']} batches successful, {metrics['features_total']} total features in {metrics['request_count']} requests")
 
