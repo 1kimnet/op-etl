@@ -6,6 +6,8 @@ Enhanced implementation with recursion depth protection and SR consistency.
 import json
 import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -305,23 +307,53 @@ def download_layer(
         supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
         oid_field = layer_info.get("objectIdField", "OBJECTID")
 
-        # Try offset-based pagination first, fall back to OID-based if transfer limits hit
+        # Check for use_oid_sweep flag and related parameters
+        use_oid_sweep = raw_config.get("use_oid_sweep", False)
+        page_size = raw_config.get("page_size", 1000)
+        max_workers = raw_config.get("max_workers", 6)
+
+        # Download features using the appropriate method
         all_features = []
         request_count = 0
+        metrics = {}
 
-        try:
-            all_features, request_count = _download_with_offset_pagination(
-                session, layer_url, base_params, layer_name, sr_config, bbox
+        if use_oid_sweep and supports_oids:
+            # Use parallel OID-based pagination when explicitly requested
+            log.info(f"[REST] {layer_name}: using parallel OID sweep (use_oid_sweep=true)")
+            all_features, metrics = fetch_rest_layer_parallel(
+                session, layer_url, base_params, layer_name, page_size, max_workers
             )
-        except TransferLimitExceededError:
-            if supports_oids:
-                log.info(f"[REST] Transfer limit exceeded, switching to OID-based pagination for {layer_name}")
-                all_features, request_count = _download_with_oid_pagination(
-                    session, layer_url, base_params, oid_field, layer_name
+            request_count = metrics.get("request_count", 0)
+            
+            # Log metrics as requested in the acceptance criteria
+            log.info(f"[REST] {layer_name}: OID sweep metrics - oids_total: {metrics.get('oids_total', 0)}, "
+                    f"batches_total: {metrics.get('batches_total', 0)}, batches_ok: {metrics.get('batches_ok', 0)}, "
+                    f"features_total: {metrics.get('features_total', 0)}")
+                    
+        elif use_oid_sweep and not supports_oids:
+            log.warning(f"[REST] {layer_name}: use_oid_sweep=true but OID pagination not supported, falling back to offset pagination")
+            # Fall back to offset-based pagination
+            try:
+                all_features, request_count = _download_with_offset_pagination(
+                    session, layer_url, base_params, layer_name, sr_config, bbox
                 )
-            else:
-                log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
-                # Continue with what we got from offset pagination
+            except TransferLimitExceededError:
+                log.warning(f"[REST] {layer_name}: offset pagination failed with transfer limits and OID pagination not supported")
+        else:
+            # Default behavior: try offset-based pagination first, fall back to sequential OID-based if transfer limits hit
+            try:
+                all_features, request_count = _download_with_offset_pagination(
+                    session, layer_url, base_params, layer_name, sr_config, bbox
+                )
+            except TransferLimitExceededError:
+                if supports_oids:
+                    log.info(f"[REST] Transfer limit exceeded, switching to sequential OID-based pagination for {layer_name}")
+                    all_features, request_count = _download_with_oid_pagination(
+                        session, layer_url, base_params, oid_field, layer_name
+                    )
+                else:
+                    log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
+                    # Continue with what we got from offset pagination
 
         # Save all features as GeoJSON
         if all_features:
@@ -514,3 +546,207 @@ def _download_with_oid_pagination(
         batch_num += 1
 
     return all_features, request_count
+
+
+def _rest_get_all_oids(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    layer_name: str
+) -> Tuple[List[int], str, int]:
+    """
+    Get all object IDs from a REST layer.
+    
+    Returns:
+        Tuple of (object_ids, oid_field_name, request_count)
+    """
+    log.debug(f"[REST] {layer_name}: discovering object IDs")
+    
+    # Get all object IDs
+    oid_params = base_params.copy()
+    oid_params.update({
+        "returnIdsOnly": "true",
+        "f": "json"  # Use JSON for IDs, not GeoJSON
+    })
+
+    query_url = f"{layer_url}/query"
+    response = session.safe_get(query_url, params=oid_params, timeout=60)
+    request_count = 1
+
+    if not response or not validate_response_content(response):
+        log.warning(f"[REST] {layer_name}: failed to get object IDs")
+        return [], "OBJECTID", request_count
+
+    oid_data = safe_json_parse(response.content)
+    if not oid_data:
+        log.warning(f"[REST] {layer_name}: failed to parse object IDs response")
+        return [], "OBJECTID", request_count
+
+    # Extract object IDs and field name
+    object_ids = oid_data.get("objectIds", [])
+    oid_field = oid_data.get("objectIdFieldName", "OBJECTID")
+    
+    log.info(f"[REST] {layer_name}: discovered {len(object_ids)} object IDs (field: {oid_field})")
+    return object_ids, oid_field, request_count
+
+
+def _rest_fetch_oid_batch(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    oid_field: str,
+    batch_ids: List[int],
+    batch_num: int,
+    layer_name: str
+) -> Tuple[List[Dict], bool, int]:
+    """
+    Fetch a single batch of features by object IDs.
+    
+    Returns:
+        Tuple of (features, success, request_count)
+    """
+    # Build OID WHERE clause
+    oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
+    
+    # Prepare parameters for feature queries
+    feature_params = base_params.copy()
+    feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
+    
+    # Combine with existing where clause if present
+    original_where = feature_params.get("where", "1=1")
+    if original_where and original_where != "1=1":
+        feature_params["where"] = f"({original_where}) AND {oid_where}"
+    else:
+        feature_params["where"] = oid_where
+
+    query_url = f"{layer_url}/query"
+    
+    # Handle potential retry after
+    retry_count = 0
+    max_retries = 3
+    
+    while retry_count <= max_retries:
+        response = session.safe_get(query_url, params=feature_params, timeout=60)
+        
+        if not response or not validate_response_content(response):
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = 2 ** retry_count  # Exponential backoff
+                log.debug(f"[REST] {layer_name} batch {batch_num}: retry {retry_count} after {wait_time}s")
+                time.sleep(wait_time)
+                continue
+            else:
+                log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_num} after {max_retries} retries")
+                return [], False, retry_count
+
+        # Check for Retry-After header (server back-pressure)
+        if hasattr(response, 'headers') and 'Retry-After' in response.headers:
+            retry_after = response.headers.get('Retry-After')
+            try:
+                wait_time = int(retry_after)
+                if wait_time > 0 and wait_time <= 30:  # Reasonable limit
+                    log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
+                    time.sleep(wait_time)
+            except (ValueError, TypeError):
+                pass  # Invalid Retry-After value, ignore
+
+        data = safe_json_parse(response.content)
+        if not data:
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = 2 ** retry_count
+                log.debug(f"[REST] {layer_name} batch {batch_num}: parse error, retry {retry_count} after {wait_time}s")
+                time.sleep(wait_time)
+                continue
+            else:
+                log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_num}")
+                return [], False, retry_count
+
+        features = data.get("features", [])
+        log.debug(f"[REST] {layer_name} batch {batch_num}: {len(features)} features")
+        return features, True, retry_count + 1
+    
+    return [], False, retry_count
+
+
+def fetch_rest_layer_parallel(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    layer_name: str,
+    page_size: int = 1000,
+    max_workers: int = 6
+) -> Tuple[List[Dict], Dict[str, int]]:
+    """
+    Download features using parallel OID-based pagination.
+    
+    Returns:
+        Tuple of (all_features, metrics_dict)
+    """
+    log.info(f"[REST] {layer_name}: using parallel OID-based pagination (page_size={page_size}, max_workers={max_workers})")
+    
+    # Initialize metrics
+    metrics = {
+        "oids_total": 0,
+        "batches_total": 0,
+        "batches_ok": 0,
+        "features_total": 0,
+        "request_count": 0
+    }
+    
+    # Step 1: Get all object IDs
+    object_ids, oid_field, request_count = _rest_get_all_oids(session, layer_url, base_params, layer_name)
+    metrics["request_count"] += request_count
+    metrics["oids_total"] = len(object_ids)
+    
+    if not object_ids:
+        log.info(f"[REST] {layer_name}: no object IDs found")
+        return [], metrics
+    
+    # Step 2: Create batches
+    batches = []
+    for i in range(0, len(object_ids), page_size):
+        batch_ids = object_ids[i:i + page_size]
+        batches.append((batch_ids, i // page_size + 1))
+    
+    metrics["batches_total"] = len(batches)
+    log.info(f"[REST] {layer_name}: created {len(batches)} batches, fetching with {max_workers} workers")
+    
+    # Step 3: Fetch batches in parallel
+    all_features = []
+    
+    # Use conservative max_workers to avoid overwhelming the server
+    actual_max_workers = min(max_workers, 8)  # Hard cap at 8 concurrent requests
+    
+    with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
+        # Submit all batch fetch tasks
+        future_to_batch = {}
+        for batch_ids, batch_num in batches:
+            future = executor.submit(
+                _rest_fetch_oid_batch,
+                session, layer_url, base_params, oid_field, batch_ids, batch_num, layer_name
+            )
+            future_to_batch[future] = batch_num
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_batch):
+            batch_num = future_to_batch[future]
+            try:
+                features, success, batch_request_count = future.result()
+                metrics["request_count"] += batch_request_count
+                
+                if success:
+                    metrics["batches_ok"] += 1
+                    if features:
+                        all_features.extend(features)
+                        metrics["features_total"] += len(features)
+                        log.debug(f"[REST] {layer_name}: completed batch {batch_num} with {len(features)} features")
+                else:
+                    log.warning(f"[REST] {layer_name}: failed batch {batch_num}")
+                    
+            except Exception as e:
+                log.error(f"[REST] {layer_name}: batch {batch_num} raised exception: {e}")
+    
+    log.info(f"[REST] {layer_name}: parallel fetch completed - {metrics['batches_ok']}/{metrics['batches_total']} batches successful, {metrics['features_total']} total features in {metrics['request_count']} requests")
+    
+    return all_features, metrics

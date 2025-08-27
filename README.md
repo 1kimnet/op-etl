@@ -8,12 +8,13 @@ OP-ETL is a lightweight ETL pipeline for geospatial data in Esri environments. I
 - **Single config file** (`config.yaml`) — all sources, workspaces, and settings in one place
 - **Multiple source types:**
   - HTTP downloads (ZIP archives of Shapefiles or FGDBs)
-  - ArcGIS REST services
+  - ArcGIS REST services with **parallel OID-batch downloading** for large datasets
   - OGC API Features (planned)
 - **Native Esri format staging** — FileGDB staging ensures smooth ArcPy processing
 - **Optional geoprocessing** — clip to AOI, reproject to target SRID
 - **Simple SDE load** — truncate-and-load workflow to SQL Server (or other supported RDBMS)
 - **Spatial Reference Consistency** — enforced SR handling with SWEREF99 TM (EPSG:3006) target
+- **High-performance downloads** — 3-10× faster REST downloads via parallel OID batching
 
 ## Basic Workflow
 
@@ -85,7 +86,13 @@ See [Spatial Reference Consistency Documentation](docs/spatial-reference-consist
        url: https://services.example.com/ArcGIS/rest/services/Vag/MapServer
        layer_ids: [0, 1, 2]
        include: true
+       raw:
+         use_oid_sweep: true    # Enable parallel downloading for large datasets
+         page_size: 1000        # Batch size (default: 1000)
+         max_workers: 6         # Concurrent threads (default: 6)
    ```
+
+   For large REST layers (50k+ features), enable parallel OID-batch downloading for 3-10× performance improvement. See [OID-Batch Parallelism Documentation](docs/oid-batch-parallelism.md) for details.
 
 ## Usage
 
