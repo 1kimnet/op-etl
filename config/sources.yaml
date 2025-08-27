@@ -442,7 +442,7 @@ sources:
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaRasoskred/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
     layer_ids:
     - 2  # Instabila slänter - Mycket kraftig lutning
     - 3  # Angränsande slänter med kraftig lutning
@@ -455,63 +455,95 @@ sources:
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaBiotopskydd/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Utförda avverkningar
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaUtfordavverkning/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Naturvårdsavtal
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNaturvardsavtal/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Återvätningsavtal
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAtervatningavtal/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Nyckelbiotoper
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNyckelbiotop/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Sumpskogar
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSumpskog/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Avverkningsanmälda områden
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAvverkningsanmalan/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Gräns för skogsskyddsbestämmelser
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsskyddsbestammelser/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
 - name: Nyckelbiotoper - storskogsbruket
   authority: SKS
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsbruknyckelbiotop/MapServer
   enabled: true
   raw:
-    format: geojson
+    format: esrijson
 
 #-----------------------------------------------#
 #                SVK - Svenska kraftnät         #
@@ -533,7 +565,7 @@ sources:
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak01/MapServer
   enabled: true
   raw:
-    format: geojson
+    format: esrijson
     layer_ids:
     - 0
     - 1
@@ -549,4 +581,11 @@ sources:
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer
   enabled: true
   raw:
-    format: geojson
+    response_format: esrijson
+    layer_ids:
+    - 2
+    - 5
+    - 7
+    in_sr: 3006
+    out_sr: 3006
+    bbox_sr: 3006
