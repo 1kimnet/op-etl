@@ -322,22 +322,6 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
         logging.error(f"[STAGE] GeoJSON import failed: {e}")
         return False
 
-def _flatten_coordinates(coords):
-    """Helper to flatten nested coordinate arrays to get first coordinate pair."""
-    if not coords:
-        return []
-        
-    # Handle different geometry types
-    if isinstance(coords[0], (int, float)):
-        return coords  # Point coordinates
-    elif isinstance(coords[0], list):
-        if len(coords[0]) >= 2 and isinstance(coords[0][0], (int, float)):
-            return coords[0]  # First coordinate of LineString/Polygon
-        elif len(coords[0]) > 0 and isinstance(coords[0][0], list):
-            return _flatten_coordinates(coords[0])  # Nested (Polygon holes, etc.)
-            
-    return []
-
 def _ensure_fc_spatial_reference(fc_path: str, epsg_code: int):
     """Ensure feature class has proper spatial reference definition."""
     try:
