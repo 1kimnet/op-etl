@@ -363,10 +363,6 @@ sources:
     bbox_crs: CRS84
     stage_sr: 4326
     target_sr: 3006
-    collections:
-    - brunnar
-    page_size: 1000
-    supports_bbox_crs: true
 - name: Jordskred och raviner
   authority: SGU
   type: ogc
