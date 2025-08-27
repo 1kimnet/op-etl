@@ -41,14 +41,13 @@ def _validate_sweref99_bounds(x: float, y: float) -> bool:
     # SWEREF99 TM (EPSG:3006) - should be in meters
     # Rough bounds for Sweden: X: 200000-900000, Y: 6100000-7700000
     
-    # First check for degree-like values (common mistake)
-    if (-180 <= x <= 180 and -90 <= y <= 90):
-        log.error(f"Coordinates {x}, {y} appear to be degrees but expected SWEREF99 TM meters - possible SR mismatch")
-        return False
-    
-    # Then check proper SWEREF99 TM bounds
+    # Check proper SWEREF99 TM bounds
     if not (200000 <= x <= 900000 and 6100000 <= y <= 7700000):
-        log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
+        # If coordinates are also degree-like, log as possible SR mismatch
+        if (-180 <= x <= 180 and -90 <= y <= 90):
+            log.error(f"Coordinates {x}, {y} appear to be degrees but expected SWEREF99 TM meters - possible SR mismatch")
+        else:
+            log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
         return False
     return True
 
