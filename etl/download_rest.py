@@ -294,7 +294,7 @@ def download_layer(
         # Try offset-based pagination first, fall back to OID-based if transfer limits hit
         all_features = []
         request_count = 0
-        
+
         try:
             all_features, request_count = _download_with_offset_pagination(
                 session, layer_url, base_params, layer_name
@@ -308,7 +308,7 @@ def download_layer(
             else:
                 log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
                 # Continue with what we got from offset pagination
-        
+
         # Save all features as GeoJSON
         if all_features:
             geojson = {"type": "FeatureCollection", "features": all_features}
@@ -332,9 +332,9 @@ def download_layer(
 
 
 def _download_with_offset_pagination(
-    session: RecursionSafeSession, 
-    layer_url: str, 
-    base_params: Dict, 
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
     layer_name: str
 ) -> Tuple[List[Dict], int]:
     """Download features using offset-based pagination with transfer limit detection."""
@@ -343,7 +343,7 @@ def _download_with_offset_pagination(
     page_size = 1000
     request_count = 0
     page_num = 1
-    
+
     # Add pagination parameters to base params
     params = base_params.copy()
     params.update({
@@ -354,7 +354,7 @@ def _download_with_offset_pagination(
     while True:
         params["resultOffset"] = offset
         query_url = f"{layer_url}/query"
-        
+
         response = session.safe_get(query_url, params=params, timeout=60)
         request_count += 1
 
@@ -374,7 +374,7 @@ def _download_with_offset_pagination(
         # Check for transfer limit exceeded
         exceeded_transfer_limit = data.get("exceededTransferLimit", False)
         features = data.get("features", [])
-        
+
         if features:
             all_features.extend(features)
             log.debug(f"[REST] {layer_name} page {page_num}: {len(features)} features (offset {offset})")
@@ -416,71 +416,72 @@ def _download_with_oid_pagination(
 ) -> Tuple[List[Dict], int]:
     """Download features using OID-based pagination for large datasets."""
     log.info(f"[REST] {layer_name}: using OID-based pagination with field '{oid_field}'")
-    
+
     # First, get all object IDs
     oid_params = base_params.copy()
     oid_params.update({
         "returnIdsOnly": "true",
         "f": "json"  # Use JSON for IDs, not GeoJSON
     })
-    
+
     query_url = f"{layer_url}/query"
     response = session.safe_get(query_url, params=oid_params, timeout=60)
     request_count = 1
-    
+
     if not response or not validate_response_content(response):
         log.warning(f"[REST] {layer_name}: failed to get object IDs for OID pagination")
         return [], request_count
-    
+
     oid_data = safe_json_parse(response.content)
     if not oid_data:
         log.warning(f"[REST] {layer_name}: failed to parse object IDs response")
         return [], request_count
-    
+
     # Extract object IDs
     object_ids = oid_data.get("objectIds", [])
     if not object_ids:
         log.info(f"[REST] {layer_name}: no object IDs found")
         return [], request_count
-    
+
     log.info(f"[REST] {layer_name}: found {len(object_ids)} object IDs, fetching in batches")
-    
+
     # Download features in batches using object IDs
     all_features = []
     batch_num = 1
-    
+    batch_size = 1000  # Number of object IDs to fetch per batch
+
     # Prepare parameters for feature queries
     feature_params = base_params.copy()
     feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
-    
+
     for i in range(0, len(object_ids), batch_size):
         batch_ids = object_ids[i:i + batch_size]
         oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
-        
+
         # Combine with existing where clause if present
         original_where = feature_params.get("where", "1=1")
         if original_where and original_where != "1=1":
             feature_params["where"] = f"({original_where}) AND {oid_where}"
         else:
             feature_params["where"] = oid_where
-        
+
         response = session.safe_get(query_url, params=feature_params, timeout=60)
         request_count += 1
-        
+
         if not response or not validate_response_content(response):
             log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_num}")
             continue
-        
+
         data = safe_json_parse(response.content)
         if not data:
             log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_num}")
             continue
-        
+
         features = data.get("features", [])
         if features:
             all_features.extend(features)
             log.debug(f"[REST] {layer_name} OID batch {batch_num}: {len(features)} features")
-        
+
         batch_num += 1
-    
+
     return all_features, request_count

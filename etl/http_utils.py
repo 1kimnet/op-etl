@@ -402,8 +402,8 @@ def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int
             data = json.loads(content)
 
             # Validate depth after parsing
-            if _check_json_depth(data) > MAX_JSON_DEPTH:
-                log.warning(f"[JSON] Exceeds maximum nesting depth of {MAX_JSON_DEPTH}")
+            if _json_depth(data, 0, max_depth) > max_depth:
+                log.warning(f"[JSON] Exceeds maximum nesting depth of {max_depth}")
                 return None
 
             return data
