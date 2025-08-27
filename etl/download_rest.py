@@ -1,6 +1,6 @@
 """
 REST API downloader for OP-ETL pipeline.
-Enhanced implementation with recursion depth protection.
+Enhanced implementation with recursion depth protection and SR consistency.
 """
 
 import json
@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
+from .sr_utils import (
+    SWEREF99_TM, WGS84_DD, get_sr_config_for_source, 
+    validate_sr_consistency, validate_bbox_vs_envelope,
+    log_sr_validation_summary
+)
 
 log = logging.getLogger(__name__)
 
@@ -266,7 +271,11 @@ def download_layer(
             log.warning(f"[REST] Layer doesn't support queries: {layer_url}")
             return 0
 
-        # Build query parameters
+        # Get SR configuration for source (enforce best practices)
+        source_info = {"type": "rest", "raw": raw_config}
+        sr_config = get_sr_config_for_source(source_info)
+        
+        # Build query parameters with enforced SR consistency
         params = {
             "f": "geojson",
             "where": raw_config.get("where", "1=1"),
@@ -274,15 +283,20 @@ def download_layer(
             "returnGeometry": "true",
             "resultOffset": 0,
             "resultRecordCount": 1000,
+            # Enforce SR 3006 for REST APIs (best practice)
+            "inSR": sr_config.get("in_sr", SWEREF99_TM),
+            "outSR": sr_config.get("out_sr", SWEREF99_TM),
         }
 
-        # Add bbox if configured (prefer raw, else global)
+        # Add bbox if configured (prefer raw, else global) - express in SR 3006
         bbox = raw_config.get("bbox") or global_bbox
+        bbox_sr = sr_config.get("bbox_sr", SWEREF99_TM)
         if bbox and len(bbox) >= 4:
             params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
             params["geometryType"] = "esriGeometryEnvelope"
-            in_sr = raw_config.get("bbox_sr") or global_sr or 4326
-            params["inSR"] = in_sr
+            params["geometrySR"] = bbox_sr
+            
+        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {params['inSR']}, outSR: {params['outSR']}")
 
         # Download features with pagination
         all_features = []
@@ -308,16 +322,34 @@ def download_layer(
                 log.warning(f"[REST] Failed to parse query response at offset {offset}")
                 break
 
+            # Validate SR consistency on first page
+            if offset == 0:
+                expected_sr = sr_config.get("out_sr", SWEREF99_TM)
+                sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
+                if not sr_valid:
+                    log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
+                
+                # Validate bbox vs envelope if applicable
+                if bbox and 'extent' in data:
+                    bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
+                    if not bbox_valid:
+                        log.warning(f"[REST] Bbox validation failed")
+
             features = data.get("features", [])
 
             if not features:
+                # Check if we hit transfer limit
+                exceeded_limit = data.get("exceededTransferLimit", False)
+                if exceeded_limit and offset == 0:
+                    log.warning(f"[REST] Transfer limit exceeded on first page")
                 break
 
             all_features.extend(features)
             log.debug(f"[REST] Downloaded {len(features)} features (offset {offset})")
 
-            # Check if we got all features
-            if len(features) < page_size:
+            # Check if we got all features or hit transfer limit
+            exceeded_limit = data.get("exceededTransferLimit", False)
+            if len(features) < page_size and not exceeded_limit:
                 break
 
             offset += page_size

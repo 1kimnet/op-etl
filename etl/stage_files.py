@@ -1,15 +1,17 @@
 """
-Simple, reliable staging system for OP-ETL.
+Simple, reliable staging system for OP-ETL with SR consistency enforcement.
 Replace etl/stage_files.py with this implementation.
 """
 import logging
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import arcpy
 
 from .utils import make_arcpy_safe_name
+from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
 
 
 def stage_all_downloads(cfg: dict) -> None:
@@ -162,6 +164,25 @@ def import_gpkg(gpkg_path: Path, out_fc: str) -> bool:
                     Path(out_fc).name
                 )
 
+                # Ensure proper SR definition and project if needed
+                desc = arcpy.Describe(out_fc)
+                current_sr = desc.spatialReference
+                
+                if current_sr.name == "Unknown" or not current_sr.name:
+                    logging.warning(f"[STAGE] Unknown SR in GPKG layer {layer_name}, assuming SWEREF99 TM")
+                    sr = arcpy.SpatialReference(SWEREF99_TM)
+                    arcpy.management.DefineProjection(out_fc, sr)
+                elif current_sr.factoryCode and current_sr.factoryCode != SWEREF99_TM:
+                    # Project to SWEREF99 TM
+                    projected_fc = f"{out_fc}_proj"
+                    try:
+                        arcpy.management.Project(out_fc, projected_fc, SWEREF99_TM)
+                        arcpy.management.Delete(out_fc)
+                        arcpy.management.Rename(projected_fc, out_fc)
+                        logging.info(f"[STAGE] Projected GPKG layer from EPSG:{current_sr.factoryCode} to EPSG:{SWEREF99_TM}")
+                    except Exception as e:
+                        logging.warning(f"[STAGE] Projection failed for GPKG layer: {e}")
+
                 logging.debug(f"[STAGE] Imported GPKG layer: {layer_name}")
                 return True
 
@@ -210,28 +231,129 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
         return []
 
 def import_shapefile(shp_path: Path, out_fc: str) -> bool:
-    """Import shapefile directly."""
+    """Import shapefile with SR validation and projection."""
     try:
+        # Import shapefile
         arcpy.conversion.FeatureClassToFeatureClass(
             str(shp_path),
             str(Path(out_fc).parent),
             Path(out_fc).name
         )
+        
+        # Check and fix SR if needed
+        desc = arcpy.Describe(out_fc)
+        current_sr = desc.spatialReference
+        
+        if current_sr.name == "Unknown" or not current_sr.name:
+            logging.warning(f"[STAGE] Unknown SR in {shp_path.name}, checking for .prj file")
+            prj_path = shp_path.with_suffix('.prj')
+            if prj_path.exists():
+                # Try to define projection from .prj file
+                arcpy.management.DefineProjection(out_fc, str(prj_path))
+                logging.info(f"[STAGE] Defined SR from .prj for {shp_path.name}")
+            else:
+                # Assume SWEREF99 TM for Swedish data
+                sr = arcpy.SpatialReference(SWEREF99_TM)
+                arcpy.management.DefineProjection(out_fc, sr)
+                logging.warning(f"[STAGE] No .prj file, assumed EPSG:{SWEREF99_TM} for {shp_path.name}")
+        
+        # Project to SWEREF99 TM if needed
+        desc = arcpy.Describe(out_fc)  # Re-describe to get updated SR
+        current_sr = desc.spatialReference
+        if current_sr.factoryCode and current_sr.factoryCode != SWEREF99_TM:
+            projected_fc = f"{out_fc}_proj"
+            try:
+                arcpy.management.Project(out_fc, projected_fc, SWEREF99_TM)
+                arcpy.management.Delete(out_fc)
+                arcpy.management.Rename(projected_fc, out_fc)
+                logging.info(f"[STAGE] Projected {shp_path.name} from EPSG:{current_sr.factoryCode} to EPSG:{SWEREF99_TM}")
+            except Exception as e:
+                logging.warning(f"[STAGE] Projection failed for {shp_path.name}: {e}")
+        
         return True
     except Exception as e:
         logging.error(f"[STAGE] Shapefile import failed: {e}")
         return False
 
 def import_geojson(geojson_path: Path, out_fc: str) -> bool:
-    """Import GeoJSON via ArcPy JSONToFeatures. Handles CRS if present."""
+    """Import GeoJSON via ArcPy JSONToFeatures with SR validation and projection."""
     try:
-        # ArcPy JSONToFeatures expects Esri JSON. However, since ArcGIS Pro 2.9+, it accepts GeoJSON too.
-        # Use JSONToFeatures directly; Pro 3.3 environment (per docs) supports GeoJSON.
+        # First, validate and detect SR from GeoJSON
+        with open(geojson_path, 'r', encoding='utf-8') as f:
+            import json
+            geojson_data = json.load(f)
+            
+        detected_sr = detect_sr_from_geojson(geojson_data)
+        if not detected_sr:
+            logging.warning(f"[STAGE] Unknown SR in {geojson_path.name}, assuming WGS84")
+            detected_sr = WGS84_DD
+            
+        # Validate coordinate magnitudes
+        features = geojson_data.get('features', [])
+        if features:
+            first_geom = features[0].get('geometry', {})
+            coords = first_geom.get('coordinates')
+            if coords:
+                flat_coords = _flatten_coordinates(coords)
+                if flat_coords and not validate_coordinates_magnitude(flat_coords[:2], detected_sr):
+                    logging.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path.name}")
+                    return False
+        
+        # Import via JSONToFeatures
         arcpy.conversion.JSONToFeatures(str(geojson_path), out_fc)
+        
+        # Ensure the output FC has a proper SR definition
+        _ensure_fc_spatial_reference(out_fc, detected_sr)
+        
+        # Project to SWEREF99 TM if needed
+        if detected_sr != SWEREF99_TM:
+            projected_fc = f"{out_fc}_proj"
+            try:
+                arcpy.management.Project(out_fc, projected_fc, SWEREF99_TM)
+                arcpy.management.Delete(out_fc)
+                arcpy.management.Rename(projected_fc, out_fc)
+                logging.info(f"[STAGE] Projected {geojson_path.name} from EPSG:{detected_sr} to EPSG:{SWEREF99_TM}")
+            except Exception as e:
+                logging.warning(f"[STAGE] Projection failed for {geojson_path.name}: {e}")
+                # Keep original if projection fails
+        
         return True
     except Exception as e:
         logging.error(f"[STAGE] GeoJSON import failed: {e}")
         return False
+
+def _flatten_coordinates(coords):
+    """Helper to flatten nested coordinate arrays to get first coordinate pair."""
+    if not coords:
+        return []
+        
+    # Handle different geometry types
+    if isinstance(coords[0], (int, float)):
+        return coords  # Point coordinates
+    elif isinstance(coords[0], list):
+        if len(coords[0]) >= 2 and isinstance(coords[0][0], (int, float)):
+            return coords[0]  # First coordinate of LineString/Polygon
+        elif len(coords[0]) > 0 and isinstance(coords[0][0], list):
+            return _flatten_coordinates(coords[0])  # Nested (Polygon holes, etc.)
+            
+    return []
+
+def _ensure_fc_spatial_reference(fc_path: str, epsg_code: int):
+    """Ensure feature class has proper spatial reference definition."""
+    try:
+        desc = arcpy.Describe(fc_path)
+        current_sr = desc.spatialReference
+        
+        if current_sr.name == "Unknown" or not current_sr.name:
+            # Define projection if unknown
+            sr = arcpy.SpatialReference(epsg_code)
+            arcpy.management.DefineProjection(fc_path, sr)
+            logging.info(f"[STAGE] Defined SR {epsg_code} for {fc_path}")
+        else:
+            logging.debug(f"[STAGE] SR already defined: {current_sr.name} (EPSG:{current_sr.factoryCode})")
+            
+    except Exception as e:
+        logging.warning(f"[STAGE] Failed to ensure SR for {fc_path}: {e}")
 
 def import_zip(zip_path: Path, out_fc: str) -> bool:
     """Extract ZIP and import first valid dataset."""

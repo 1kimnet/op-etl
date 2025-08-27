@@ -1,6 +1,6 @@
 """
 OGC API Features downloader for OP-ETL pipeline.
-Enhanced implementation with recursion depth protection.
+Enhanced implementation with recursion depth protection and SR consistency.
 """
 
 import json
@@ -12,6 +12,10 @@ from urllib.parse import urljoin
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
+from .sr_utils import (
+    SWEREF99_TM, WGS84_DD, CRS84, get_sr_config_for_source,
+    validate_sr_consistency, log_sr_validation_summary
+)
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +216,10 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     page_size = int(raw.get("page_size", 1000) or 1000)
     params = {}
 
+    # Get SR configuration for source (OGC-specific handling)
+    source_info = {"type": "ogc", "raw": raw}
+    sr_config = get_sr_config_for_source(source_info)
+    
     # Only add limit parameter if explicitly configured and not the default
     if raw.get("page_size") and raw.get("page_size") != 1000:
         params["limit"] = page_size
@@ -222,14 +230,21 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     }
 
     bbox = raw.get("bbox") or global_bbox
+    bbox_crs = sr_config.get("bbox_crs", CRS84)
+    
     if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox[:4])
-        sr = raw.get("bbox_sr") or raw.get("bbox-crs") or global_crs
-        supports_bbox_crs = bool(raw.get("supports_bbox_crs", True))
-        if sr and supports_bbox_crs:
-            # Always use CRS84 for maximum compatibility
+        # Check if server supports EPSG:3006, otherwise use CRS84
+        supports_3006 = raw.get("supports_epsg_3006", False)
+        if supports_3006:
+            params["bbox-crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
+            params["crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
+            log.info(f"[OGC] Using EPSG:{SWEREF99_TM} for {collection_id}")
+        else:
             params["bbox-crs"] = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
+            log.info(f"[OGC] Using CRS84 for {collection_id} (EPSG:3006 not supported)")
 
+    validation_results = {}
     total = 0
     page = 1
     all_features: List[Dict] = []
@@ -260,6 +275,14 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
                 log.error(f"[OGC] Failed to parse response for page {page} of {collection_id}")
                 break
 
+            # Validate SR consistency on first page
+            if page == 1:
+                expected_sr = SWEREF99_TM if supports_3006 else WGS84_DD
+                sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
+                validation_results["sr_consistency"] = sr_valid
+                if not sr_valid:
+                    log.warning(f"[OGC] SR validation failed for {collection_id} - expected {expected_sr}, detected {detected_sr}")
+
             features = data.get("features", [])
             if features:
                 all_features.extend(features)
@@ -267,10 +290,17 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
                 log.debug(f"[OGC] Page {page}: {len(features)} features")
                 page += 1
 
-            # Find next link
+            # Find next link and preserve CRS parameters
             next_link = _find_next_link(data.get("links", []))
             next_url = next_link
             next_params = None
+            
+            # Ensure CRS params are maintained across pagination
+            if next_url and supports_3006:
+                if "?" in next_url:
+                    next_url += f"&crs=http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
+                else:
+                    next_url += f"?crs=http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
 
             if not next_url:
                 break
@@ -285,11 +315,17 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
                 time.sleep(delay_seconds)
 
         # Write a single merged file per collection
-        out_file = out_dir / f"{collection_id}.geojson"
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
+        if all_features:
+            out_file = out_dir / f"{collection_id}.geojson"
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
 
-        log.info(f"[OGC] Saved {total} features to {out_file.name}")
+            log.info(f"[OGC] Saved {total} features to {out_file.name}")
+            
+            # Log validation summary
+            if validation_results:
+                log_sr_validation_summary(collection_id, validation_results)
+        
         return total
 
     except RecursionError as e:

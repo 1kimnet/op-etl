@@ -1,7 +1,13 @@
 # Global defaults for bbox filtering (inherited by sources that don't specify their own)
+# Updated to use SWEREF99 TM (EPSG:3006) for REST APIs as best practice
 defaults:
-  bbox: [16.4733147, 59.0678531, 17.6430658, 59.6406047]
-  bbox_sr: 4326
+  # Stockholm region in SWEREF99 TM coordinates (meters)
+  bbox: [610000, 6550000, 700000, 6650000]  
+  bbox_sr: 3006
+  
+  # For OGC APIs that don't support EPSG:3006, use CRS84 
+  ogc_bbox: [16.4733147, 59.0678531, 17.6430658, 59.6406047]
+  ogc_bbox_sr: "CRS84"
 
 sources:
 #---------------------------------------------------#
@@ -84,6 +90,10 @@ sources:
     format: geojson
     layer_ids:
     - 0
+    # SR configuration for REST API (enforces SWEREF99 TM)
+    bbox_sr: 3006
+    in_sr: 3006
+    out_sr: 3006
 - name: Riksintressen - Vindbruk
   authority: LST
   type: rest
@@ -91,6 +101,10 @@ sources:
   enabled: true
   raw:
     format: geojson
+    # SR configuration for REST API (enforces SWEREF99 TM)
+    bbox_sr: 3006
+    in_sr: 3006
+    out_sr: 3006
 
 #-------------------------------------------------------------#
 #                LSTD - Länsstyrelsen Södermanland            #
@@ -329,12 +343,26 @@ sources:
     - aktiv-erosion
     page_size: 1000
     supports_bbox_crs: true
+    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
+    supports_epsg_3006: false
+    bbox_crs: CRS84
+    stage_sr: 4326
+    target_sr: 3006
 - name: Brunnar
   authority: SGU
   type: ogc
   url: https://api.sgu.se/oppnadata/brunnar/ogc/features/v1/collections/
   enabled: true
   raw:
+    collections:
+    - brunnar
+    page_size: 1000
+    supports_bbox_crs: true
+    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
+    supports_epsg_3006: false
+    bbox_crs: CRS84
+    stage_sr: 4326
+    target_sr: 3006
     collections:
     - brunnar
     page_size: 1000

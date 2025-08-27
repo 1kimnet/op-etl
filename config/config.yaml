@@ -125,11 +125,43 @@ use_bbox_filter: true  # Set to true to enable BBOX filtering for REST APIs
 continue_on_failure: true
 
 # Optional: Define a global BBOX here if use_bbox_filter is true
-# These would be used if a source of type 'rest_api' doesn't define its own bbox in sources.yaml
+# For REST APIs: use SWEREF99 TM coordinates (EPSG:3006)
+# For OGC APIs: use CRS84 coordinates (lon/lat)
+global_bbox:
+  coords: [610000, 6550000, 700000, 6650000]  # SWEREF99 TM (meters) for Stockholm region
+  crs: 3006
+
 global_ogc_bbox:
-  coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]
+  coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]  # CRS84 (degrees) for Stockholm region
   crs: "CRS84"
+  
 ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
+
+# Spatial Reference Configuration
+spatial_reference:
+  # Enforce SR consistency throughout pipeline
+  enforce_consistency: true
+  
+  # Default SRs for different source types
+  rest_api:
+    bbox_sr: 3006    # Filter bbox in SWEREF99 TM
+    in_sr: 3006      # Input SR for geometry parameter
+    out_sr: 3006     # Output SR for response
+    target_sr: 3006  # Final staging SR
+    
+  ogc_api:
+    bbox_crs: "CRS84"          # Default to CRS84 for bbox
+    prefer_crs: "EPSG:3006"    # Prefer EPSG:3006 if supported
+    stage_sr: 4326             # Stage in WGS84 if using CRS84
+    target_sr: 3006            # Project to SWEREF99 TM
+    
+  file_sources:
+    target_sr: 3006            # Always project to SWEREF99 TM
+    
+  validation:
+    magnitude_check: true      # Validate coordinate magnitudes
+    envelope_check: true       # Validate response envelope vs bbox
+    sr_presence_check: true    # Ensure no "Unknown" SR
 
 # SDE loading settings
 sde_connection_file: "./data/connections/prod.sde"
