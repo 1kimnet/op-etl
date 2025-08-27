@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
-    SWEREF99_TM, get_sr_config_for_source, 
+    SWEREF99_TM, WGS84_DD, get_sr_config_for_source, 
     validate_sr_consistency, validate_bbox_vs_envelope,
     log_sr_validation_summary
 )
@@ -109,18 +109,18 @@ def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, 
         xmin, ymin, xmax, ymax = bbox_3006
         geom = {
             "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax, 
-            "spatialReference": {"wkid": 3006}
+            "spatialReference": {"wkid": SWEREF99_TM}
         }
         params.update({
             "geometry": json.dumps(geom),
             "geometryType": "esriGeometryEnvelope",
-            "inSR": 3006,
+            "inSR": SWEREF99_TM,
             "spatialRel": "esriSpatialRelIntersects",
         })
 
     if fmt == "esrijson":
         params["f"] = "json"
-        params["outSR"] = cfg.get("stage_sr", 3006)
+        params["outSR"] = cfg.get("stage_sr", SWEREF99_TM)
     else:
         # GeoJSON path: outSR is ignored; assume WGS84 degrees
         params["f"] = "geojson"
@@ -212,7 +212,7 @@ def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
             raise RuntimeError(f"{fc}: Unknown spatial reference")
 
         if response_format.lower() == "geojson":
-            expected = 4326
+            expected = WGS84_DD
         else:
             expected = target_sr  # esrijson path should already be in target SR
 
@@ -222,9 +222,9 @@ def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
         # Magnitude sanity check (sample 1 row)
         with arcpy.da.SearchCursor(fc, ["SHAPE@X", "SHAPE@Y"]) as cur:
             for x, y in cur:
-                if expected == 3006 and (-180 <= x <= 180 and -90 <= y <= 90):
+                if expected == SWEREF99_TM and (-180 <= x <= 180 and -90 <= y <= 90):
                     raise RuntimeError(f"{fc}: Degrees detected in meter-based SR {expected}")
-                elif expected == 4326 and (abs(x) > 180 or abs(y) > 90):
+                elif expected == WGS84_DD and (abs(x) > 180 or abs(y) > 90):
                     raise RuntimeError(f"{fc}: Meter coordinates detected in degree-based SR {expected}")
                 break  # Only check first row
                 
@@ -434,8 +434,8 @@ def download_layer(
 
         # Get response format and SR configuration
         fmt = raw_config.get("response_format", "esrijson").lower()
-        stage_sr = int(raw_config.get("stage_sr", 3006 if fmt == "esrijson" else 4326))
-        target_sr = int(raw_config.get("target_sr", 3006))
+        stage_sr = int(raw_config.get("stage_sr", SWEREF99_TM if fmt == "esrijson" else WGS84_DD))
+        target_sr = int(raw_config.get("target_sr", SWEREF99_TM))
         transform = raw_config.get("geo_transform", "WGS_1984_To_ETRS_1989") if stage_sr != target_sr else None
         
         # Convert bbox to SWEREF99 TM tuple if needed
