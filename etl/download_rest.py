@@ -716,7 +716,7 @@ def fetch_rest_layer_parallel(
     all_features = []
     
     # Use conservative max_workers to avoid overwhelming the server
-    actual_max_workers = min(max_workers, 8)  # Hard cap at 8 concurrent requests
+    actual_max_workers = min(max_workers, MAX_CONCURRENT_REQUESTS)  # Hard cap at MAX_CONCURRENT_REQUESTS concurrent requests
     
     with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
         # Submit all batch fetch tasks
