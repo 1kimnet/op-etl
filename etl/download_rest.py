@@ -644,7 +644,7 @@ def _rest_fetch_oid_batch(
             retry_after = response.headers.get('Retry-After')
             try:
                 wait_time = int(retry_after)
-                if wait_time > 0 and wait_time <= 30:  # Reasonable limit
+                if wait_time > 0 and wait_time <= MAX_RETRY_AFTER_SECONDS:  # Reasonable limit
                     log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
                     time.sleep(wait_time)
             except (ValueError, TypeError):
