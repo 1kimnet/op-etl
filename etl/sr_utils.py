@@ -40,14 +40,8 @@ def _validate_sweref99_bounds(x: float, y: float) -> bool:
     """Validate SWEREF99 TM coordinate bounds."""
     # SWEREF99 TM (EPSG:3006) - should be in meters
     # Rough bounds for Sweden: X: 200000-900000, Y: 6100000-7700000
-    
-    # Check proper SWEREF99 TM bounds
     if not (200000 <= x <= 900000 and 6100000 <= y <= 7700000):
-        # If coordinates are also degree-like, log as possible SR mismatch
-        if (-180 <= x <= 180 and -90 <= y <= 90):
-            log.error(f"Coordinates {x}, {y} appear to be degrees but expected SWEREF99 TM meters - possible SR mismatch")
-        else:
-            log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
+        log.warning(f"Coordinates {x}, {y} outside expected SWEREF99 TM bounds")
         return False
     return True
 
@@ -294,29 +288,13 @@ def get_sr_config_for_source(source: Dict[str, Any]) -> Dict[str, Any]:
     
     # Default configurations based on best practices
     if source_type == 'rest':
-        # Check response format to determine appropriate SR configuration
-        response_format = raw.get('response_format', 'esrijson')  # Default to esrijson for backward compatibility
-        
-        if response_format == 'geojson':
-            # GeoJSON path: assume EPSG:4326, stage in 4326, project to 3006
-            return {
-                'response_format': 'geojson',
-                'bbox_sr': raw.get('bbox_sr', SWEREF99_TM),  # Still filter in 3006 for consistency
-                'in_sr': raw.get('in_sr', SWEREF99_TM),
-                'out_sr': None,  # Don't set outSR for GeoJSON - servers often ignore it
-                'stage_sr': raw.get('stage_sr', WGS84_DD),
-                'target_sr': raw.get('target_sr', SWEREF99_TM)
-            }
-        else:  # 'esrijson' (default)
-            # EsriJSON path: use EPSG:3006 throughout
-            return {
-                'response_format': 'esrijson',
-                'bbox_sr': raw.get('bbox_sr', SWEREF99_TM),
-                'in_sr': raw.get('in_sr', SWEREF99_TM),
-                'out_sr': raw.get('out_sr', SWEREF99_TM),
-                'stage_sr': raw.get('stage_sr', SWEREF99_TM),
-                'target_sr': raw.get('target_sr', SWEREF99_TM)
-            }
+        return {
+            'bbox_sr': raw.get('bbox_sr', SWEREF99_TM),
+            'in_sr': raw.get('in_sr', SWEREF99_TM),
+            'out_sr': raw.get('out_sr', SWEREF99_TM),
+            'stage_sr': raw.get('stage_sr', SWEREF99_TM),
+            'target_sr': raw.get('target_sr', SWEREF99_TM)
+        }
     elif source_type == 'ogc':
         # Check if server supports EPSG:3006
         supports_3006 = raw.get('supports_epsg_3006', False)

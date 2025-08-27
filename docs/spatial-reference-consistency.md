@@ -45,39 +45,12 @@ Provides core functions for SR validation and consistency checking:
 ### 4. Configuration Patterns
 
 #### REST API Configuration
-
-**EsriJSON Format (Default)**
 ```yaml
-- name: Example REST Source (EsriJSON)
+- name: Example REST Source
   type: rest
   url: https://example.com/rest/services/Data/MapServer
   raw:
-    response_format: esrijson   # Request f=json, set outSR=3006, expect meters
-    bbox_sr: 3006
-    in_sr: 3006
-    out_sr: 3006
-    layer_ids: [0, 1]
-    # Results staged in EPSG:3006, no projection needed
-```
-
-**GeoJSON Format (for servers that ignore outSR)**
-```yaml
-- name: Example REST Source (GeoJSON)
-  type: rest  
-  url: https://example.com/rest/services/Data/MapServer
-  raw:
-    response_format: geojson    # Request f=geojson, no outSR, expect degrees
-    layer_ids: [0, 1]
-    # Results staged in EPSG:4326, projected to EPSG:3006
-```
-
-**Backward Compatible (defaults to esrijson)**
-```yaml
-- name: Example REST Source (Legacy)
-  type: rest
-  url: https://example.com/rest/services/Data/MapServer
-  raw:
-    # No response_format specified = esrijson (backward compatible)
+    # Explicit SR configuration (enforces SWEREF99 TM)
     bbox_sr: 3006
     in_sr: 3006
     out_sr: 3006
@@ -115,12 +88,10 @@ Or for servers that don't support EPSG:3006:
 ## Best Practices Enforced
 
 ### For REST APIs
-1. **Choose appropriate response format**:
-   - `response_format: esrijson` (default) for servers that respect `outSR` parameter
-   - `response_format: geojson` for servers that ignore `outSR` with GeoJSON
-2. **Express filter bbox in SR 3006** (meters, SWEREF99 TM)
-3. **EsriJSON path**: `f=json`, `outSR=3006`, stage directly in EPSG:3006
-4. **GeoJSON path**: `f=geojson`, no `outSR`, stage in EPSG:4326, project to EPSG:3006
+1. **Express filter bbox in SR 3006** (meters, SWEREF99 TM)
+2. **Specify `geometry`, `inSR`, and `outSR` as 3006**
+3. **Ensure staging feature class created with SR 3006**
+4. **Insert rows using numbers as-is** (no additional projection)
 5. **Page until `exceededTransferLimit=false`** and `last_count < page_size`
 
 ### For OGC APIs

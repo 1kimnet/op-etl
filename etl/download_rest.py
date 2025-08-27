@@ -6,6 +6,8 @@ Enhanced implementation with recursion depth protection and SR consistency.
 import json
 import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,6 +20,10 @@ from .sr_utils import (
 )
 
 log = logging.getLogger(__name__)
+
+# Constants for parallel processing and retry handling
+MAX_CONCURRENT_REQUESTS = 8  # Hard cap on concurrent requests per layer
+MAX_RETRY_AFTER_SECONDS = 30  # Maximum wait time for Retry-After headers
 
 
 class TransferLimitExceededError(Exception):
@@ -77,6 +83,156 @@ def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int
         return coords, sr
     except Exception:
         return None, None
+
+
+def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, float]] = None) -> Dict[str, str]:
+    """
+    Build REST API parameters with explicit format handling.
+    
+    Args:
+        cfg: Raw configuration dictionary
+        bbox_3006: Optional bounding box in SWEREF99 TM (3006) coordinates as (xmin, ymin, xmax, ymax)
+        
+    Returns:
+        Dictionary of REST API parameters
+    """
+    fmt = cfg.get("response_format", "esrijson").lower()
+    params = {
+        "where": cfg.get("where", "1=1"),
+        "outFields": "*",
+        "returnGeometry": "true",
+        "orderByFields": "OBJECTID ASC",
+    }
+
+    # Geometry filter: always send the envelope in SWEREF99 TM; REST expects JSON
+    if bbox_3006:
+        xmin, ymin, xmax, ymax = bbox_3006
+        geom = {
+            "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax, 
+            "spatialReference": {"wkid": SWEREF99_TM}
+        }
+        params.update({
+            "geometry": json.dumps(geom),
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": SWEREF99_TM,
+            "spatialRel": "esriSpatialRelIntersects",
+        })
+
+    if fmt == "esrijson":
+        params["f"] = "json"
+        params["outSR"] = cfg.get("stage_sr", SWEREF99_TM)
+    else:
+        # GeoJSON path: outSR is ignored; assume WGS84 degrees
+        params["f"] = "geojson"
+        params.pop("outSR", None)
+
+    return params
+
+
+def create_staging_fc(workspace: str, name: str, geometry_type: str, response_format: str, stage_sr: int) -> str:
+    """
+    Create a staging feature class with the appropriate spatial reference.
+    
+    Args:
+        workspace: Path to workspace (typically arcpy.env.scratchGDB)
+        name: Feature class name
+        geometry_type: Geometry type (e.g., "POLYLINE", "POLYGON", "POINT")
+        response_format: Format used ("esrijson" or "geojson")
+        stage_sr: Staging spatial reference EPSG code
+        
+    Returns:
+        Full path to created feature class
+    """
+    try:
+        import arcpy
+        sr = arcpy.SpatialReference(stage_sr)
+        arcpy.management.CreateFeatureclass(workspace, name, geometry_type, spatial_reference=sr)
+        fc_path = f"{workspace}\\{name}"
+        log.info(f"[REST] Created staging FC {name} with SR {stage_sr} ({response_format} format)")
+        return fc_path
+    except Exception as e:
+        log.error(f"[REST] Failed to create staging FC {name}: {e}")
+        raise
+
+
+def ensure_target_sr(in_fc: str, target_sr: int, transform: Optional[str] = None) -> str:
+    """
+    Ensure feature class is in target spatial reference, projecting if needed.
+    
+    Args:
+        in_fc: Input feature class path
+        target_sr: Target spatial reference EPSG code
+        transform: Optional transformation method
+        
+    Returns:
+        Path to feature class in target SR (may be same as input if no projection needed)
+    """
+    try:
+        import arcpy
+        sr_in = arcpy.Describe(in_fc).spatialReference
+        if sr_in and sr_in.factoryCode == target_sr:
+            log.debug(f"[REST] FC already in target SR {target_sr}")
+            return in_fc
+            
+        out_fc = in_fc + f"_{target_sr}"
+        log.info(f"[REST] Projecting from SR {sr_in.factoryCode} to {target_sr}")
+        
+        project_params = {
+            "in_dataset": in_fc,
+            "out_dataset": out_fc,
+            "out_coor_system": arcpy.SpatialReference(target_sr)
+        }
+        
+        if transform:
+            project_params["transform_method"] = transform
+            
+        arcpy.management.Project(**project_params)
+        return out_fc
+    except Exception as e:
+        log.error(f"[REST] Failed to project FC to target SR {target_sr}: {e}")
+        raise
+
+
+def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
+    """
+    Validate staged feature class spatial reference and coordinate magnitudes.
+    
+    Args:
+        fc: Feature class path
+        response_format: Format used ("esrijson" or "geojson") 
+        target_sr: Expected target spatial reference
+        
+    Raises:
+        RuntimeError: If validation fails
+    """
+    try:
+        import arcpy
+        sr = arcpy.Describe(fc).spatialReference
+        if not sr or sr.factoryCode in (0, None):
+            raise RuntimeError(f"{fc}: Unknown spatial reference")
+
+        if response_format.lower() == "geojson":
+            expected = WGS84_DD
+        else:
+            expected = target_sr  # esrijson path should already be in target SR
+
+        if sr.factoryCode != expected:
+            raise RuntimeError(f"{fc}: SR={sr.factoryCode}, expected {expected}")
+
+        # Magnitude sanity check (sample 1 row)
+        with arcpy.da.SearchCursor(fc, ["SHAPE@X", "SHAPE@Y"]) as cur:
+            for x, y in cur:
+                if expected == SWEREF99_TM and (-180 <= x <= 180 and -90 <= y <= 90):
+                    raise RuntimeError(f"{fc}: Degrees detected in meter-based SR {expected}")
+                elif expected == WGS84_DD and (abs(x) > 180 or abs(y) > 90):
+                    raise RuntimeError(f"{fc}: Meter coordinates detected in degree-based SR {expected}")
+                break  # Only check first row
+                
+        log.info(f"[REST] Validation passed for {fc} (SR={sr.factoryCode}, format={response_format})")
+        
+    except Exception as e:
+        log.error(f"[REST] Validation failed for {fc}: {e}")
+        raise
 
 
 def run(cfg: dict) -> None:
@@ -276,68 +432,74 @@ def download_layer(
             log.warning(f"[REST] Layer doesn't support queries: {layer_url}")
             return 0
 
-        # Get SR configuration for source (enforce best practices)
-        source_info = {"type": "rest", "raw": raw_config}
-        sr_config = get_sr_config_for_source(source_info)
+        # Get response format and SR configuration
+        fmt = raw_config.get("response_format", "esrijson").lower()
+        stage_sr = int(raw_config.get("stage_sr", SWEREF99_TM if fmt == "esrijson" else WGS84_DD))
+        target_sr = int(raw_config.get("target_sr", SWEREF99_TM))
+        transform = raw_config.get("geo_transform", "WGS_1984_To_ETRS_1989") if stage_sr != target_sr else None
         
-        # Determine format and SR parameters based on response_format configuration
-        response_format = sr_config.get('response_format', 'esrijson')
-        
-        # Build base query parameters with format-specific SR handling
-        base_params = {
-            "where": raw_config.get("where", "1=1"),
-            "outFields": raw_config.get("out_fields", "*"),
-            "returnGeometry": "true",
-        }
-        
-        # Set format and SR parameters based on response_format
-        if response_format == 'geojson':
-            base_params["f"] = "geojson"
-            # For GeoJSON: don't set outSR as many servers ignore it
-            base_params["inSR"] = sr_config.get("in_sr", SWEREF99_TM)
-            # outSR is intentionally omitted for GeoJSON format
-        else:  # esrijson (default)
-            base_params["f"] = "json"
-            base_params["inSR"] = sr_config.get("in_sr", SWEREF99_TM)
-            out_sr = sr_config.get("out_sr")
-            if out_sr:
-                base_params["outSR"] = out_sr
-
-        # Add bbox if configured (prefer raw, else global) - express in SR 3006
+        # Convert bbox to SWEREF99 TM tuple if needed
         bbox = raw_config.get("bbox") or global_bbox
-        bbox_sr = sr_config.get("bbox_sr", SWEREF99_TM)
+        bbox_3006 = None
         if bbox and len(bbox) >= 4:
-            base_params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
-            base_params["geometryType"] = "esriGeometryEnvelope"
-            base_params["geometrySR"] = bbox_sr
+            bbox_3006 = tuple(bbox[:4])
             
-        if response_format == 'geojson':
-            out_sr_display = "omitted (GeoJSON)"
-        else:
-            out_sr_display = base_params.get('outSR', 'not set')
-        log.info(f"[REST] Using format: {response_format}, SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {out_sr_display}")
+        # Build REST parameters using new helper
+        base_params = build_rest_params(raw_config, bbox_3006)
+        
+        log.info(f"[REST] Using format={fmt}, stage_sr={stage_sr}, target_sr={target_sr}, transform={transform}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
         supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
         oid_field = layer_info.get("objectIdField", "OBJECTID")
 
-        # Try offset-based pagination first, fall back to OID-based if transfer limits hit
+        # Check for use_oid_sweep flag and related parameters
+        use_oid_sweep = raw_config.get("use_oid_sweep", False)
+        page_size = raw_config.get("page_size", 1000)
+        max_workers = raw_config.get("max_workers", 6)
+
+        # Download features using the appropriate method
         all_features = []
         request_count = 0
+        metrics = {}
 
-        try:
-            all_features, request_count = _download_with_offset_pagination(
-                session, layer_url, base_params, layer_name, sr_config, bbox, response_format
+        if use_oid_sweep and supports_oids:
+            # Use parallel OID-based pagination when explicitly requested
+            log.info(f"[REST] {layer_name}: using parallel OID sweep (use_oid_sweep=true)")
+            all_features, metrics = fetch_rest_layer_parallel(
+                session, layer_url, base_params, layer_name, page_size, max_workers
             )
-        except TransferLimitExceededError:
-            if supports_oids:
-                log.info(f"[REST] Transfer limit exceeded, switching to OID-based pagination for {layer_name}")
-                all_features, request_count = _download_with_oid_pagination(
-                    session, layer_url, base_params, oid_field, layer_name
+            request_count = metrics.get("request_count", 0)
+            
+            # Log metrics as requested in the acceptance criteria
+            log.info(f"[REST] {layer_name}: OID sweep metrics - oids_total: {metrics.get('oids_total', 0)}, "
+                    f"batches_total: {metrics.get('batches_total', 0)}, batches_ok: {metrics.get('batches_ok', 0)}, "
+                    f"features_total: {metrics.get('features_total', 0)}")
+                    
+        elif use_oid_sweep and not supports_oids:
+            log.warning(f"[REST] {layer_name}: use_oid_sweep=true but OID pagination not supported, falling back to offset pagination")
+            # Fall back to offset-based pagination
+            try:
+                all_features, request_count = _download_with_offset_pagination(
+                    session, layer_url, base_params, layer_name, fmt, stage_sr
                 )
-            else:
-                log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
-                # Continue with what we got from offset pagination
+            except TransferLimitExceededError:
+                log.warning(f"[REST] {layer_name}: offset pagination failed with transfer limits and OID pagination not supported")
+        else:
+            # Default behavior: try offset-based pagination first, fall back to sequential OID-based if transfer limits hit
+            try:
+                all_features, request_count = _download_with_offset_pagination(
+                    session, layer_url, base_params, layer_name, fmt, stage_sr
+                )
+            except TransferLimitExceededError:
+                if supports_oids:
+                    log.info(f"[REST] Transfer limit exceeded, switching to sequential OID-based pagination for {layer_name}")
+                    all_features, request_count = _download_with_oid_pagination(
+                        session, layer_url, base_params, oid_field, layer_name
+                    )
+                else:
+                    log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
+                    # Continue with what we got from offset pagination
 
         # Save all features as GeoJSON
         if all_features:
@@ -366,9 +528,8 @@ def _download_with_offset_pagination(
     layer_url: str,
     base_params: Dict,
     layer_name: str,
-    sr_config: Dict,
-    bbox: Optional[List[float]],
-    response_format: str
+    response_format: str,
+    stage_sr: int
 ) -> Tuple[List[Dict], int]:
     """Download features using offset-based pagination with transfer limit detection."""
     all_features = []
@@ -403,24 +564,6 @@ def _download_with_offset_pagination(
         if not data:
             log.warning(f"[REST] Failed to parse query response for {layer_name} at offset {offset}")
             break
-
-        # Validate SR consistency on first page
-        if offset == 0:
-            # Expect different SR based on response format
-            if response_format == 'geojson':
-                expected_sr = WGS84_DD  # GeoJSON typically returns WGS84
-            else:
-                expected_sr = sr_config.get("out_sr", SWEREF99_TM)
-                
-            sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
-            if not sr_valid:
-                log.warning(f"[REST] SR validation failed for {response_format} format - expected {expected_sr}, detected {detected_sr}")
-            
-            # Validate bbox vs envelope if applicable
-            if bbox and 'extent' in data:
-                bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
-                if not bbox_valid:
-                    log.warning("Bbox validation failed")
 
         # Check for transfer limit exceeded
         exceeded_transfer_limit = data.get("exceededTransferLimit", False)
@@ -501,9 +644,8 @@ def _download_with_oid_pagination(
     batch_num = 1
     batch_size = 1000  # Number of object IDs to fetch per batch
 
-    # Prepare parameters for feature queries
+    # Prepare parameters for feature queries - use the same format as base_params
     feature_params = base_params.copy()
-    # Use the same format as the main pagination (already set in base_params)
 
     for i in range(0, len(object_ids), batch_size):
         batch_ids = object_ids[i:i + batch_size]
@@ -536,3 +678,206 @@ def _download_with_oid_pagination(
         batch_num += 1
 
     return all_features, request_count
+
+
+def _rest_get_all_oids(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    layer_name: str
+) -> Tuple[List[int], str, int]:
+    """
+    Get all object IDs from a REST layer.
+    
+    Returns:
+        Tuple of (object_ids, oid_field_name, request_count)
+    """
+    log.debug(f"[REST] {layer_name}: discovering object IDs")
+    
+    # Get all object IDs
+    oid_params = base_params.copy()
+    oid_params.update({
+        "returnIdsOnly": "true",
+        "f": "json"  # Use JSON for IDs, not GeoJSON
+    })
+
+    query_url = f"{layer_url}/query"
+    response = session.safe_get(query_url, params=oid_params, timeout=60)
+    request_count = 1
+
+    if not response or not validate_response_content(response):
+        log.warning(f"[REST] {layer_name}: failed to get object IDs")
+        return [], "OBJECTID", request_count
+
+    oid_data = safe_json_parse(response.content)
+    if not oid_data:
+        log.warning(f"[REST] {layer_name}: failed to parse object IDs response")
+        return [], "OBJECTID", request_count
+
+    # Extract object IDs and field name
+    object_ids = oid_data.get("objectIds", [])
+    oid_field = oid_data.get("objectIdFieldName", "OBJECTID")
+    
+    log.info(f"[REST] {layer_name}: discovered {len(object_ids)} object IDs (field: {oid_field})")
+    return object_ids, oid_field, request_count
+
+
+def _rest_fetch_oid_batch(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    oid_field: str,
+    batch_ids: List[int],
+    batch_num: int,
+    layer_name: str
+) -> Tuple[List[Dict], bool, int]:
+    """
+    Fetch a single batch of features by object IDs.
+    
+    Returns:
+        Tuple of (features, success, request_count)
+    """
+    # Build OID WHERE clause
+    oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
+    
+    # Prepare parameters for feature queries - use the same format as base_params
+    feature_params = base_params.copy()
+    
+    # Combine with existing where clause if present
+    original_where = feature_params.get("where", "1=1")
+    if original_where and original_where != "1=1":
+        feature_params["where"] = f"({original_where}) AND {oid_where}"
+    else:
+        feature_params["where"] = oid_where
+
+    query_url = f"{layer_url}/query"
+    
+    # Handle potential retry after
+    retry_count = 0
+    max_retries = 3
+    
+    while retry_count <= max_retries:
+        response = session.safe_get(query_url, params=feature_params, timeout=60)
+        
+        if not response or not validate_response_content(response):
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = 2 ** retry_count  # Exponential backoff
+                log.debug(f"[REST] {layer_name} batch {batch_num}: retry {retry_count} after {wait_time}s")
+                time.sleep(wait_time)
+                continue
+            else:
+                log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_num} after {max_retries} retries")
+                return [], False, retry_count
+
+        # Check for Retry-After header (server back-pressure)
+        if hasattr(response, 'headers') and 'Retry-After' in response.headers:
+            retry_after = response.headers.get('Retry-After')
+            try:
+                wait_time = int(retry_after)
+                if wait_time > 0 and wait_time <= MAX_RETRY_AFTER_SECONDS:  # Reasonable limit
+                    log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
+                    time.sleep(wait_time)
+            except (ValueError, TypeError):
+                pass  # Invalid Retry-After value, ignore
+
+        data = safe_json_parse(response.content)
+        if not data:
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = 2 ** retry_count
+                log.debug(f"[REST] {layer_name} batch {batch_num}: parse error, retry {retry_count} after {wait_time}s")
+                time.sleep(wait_time)
+                continue
+            else:
+                log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_num}")
+                return [], False, retry_count
+
+        features = data.get("features", [])
+        log.debug(f"[REST] {layer_name} batch {batch_num}: {len(features)} features")
+        return features, True, retry_count + 1
+    
+    return [], False, retry_count
+
+
+def fetch_rest_layer_parallel(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    layer_name: str,
+    page_size: int = 1000,
+    max_workers: int = 6
+) -> Tuple[List[Dict], Dict[str, int]]:
+    """
+    Download features using parallel OID-based pagination.
+    
+    Returns:
+        Tuple of (all_features, metrics_dict)
+    """
+    log.info(f"[REST] {layer_name}: using parallel OID-based pagination (page_size={page_size}, max_workers={max_workers})")
+    
+    # Initialize metrics
+    metrics = {
+        "oids_total": 0,
+        "batches_total": 0,
+        "batches_ok": 0,
+        "features_total": 0,
+        "request_count": 0
+    }
+    
+    # Step 1: Get all object IDs
+    object_ids, oid_field, request_count = _rest_get_all_oids(session, layer_url, base_params, layer_name)
+    metrics["request_count"] += request_count
+    metrics["oids_total"] = len(object_ids)
+    
+    if not object_ids:
+        log.info(f"[REST] {layer_name}: no object IDs found")
+        return [], metrics
+    
+    # Step 2: Create batches
+    batches = []
+    for i in range(0, len(object_ids), page_size):
+        batch_ids = object_ids[i:i + page_size]
+        batches.append((batch_ids, i // page_size + 1))
+    
+    metrics["batches_total"] = len(batches)
+    log.info(f"[REST] {layer_name}: created {len(batches)} batches, fetching with {max_workers} workers")
+    
+    # Step 3: Fetch batches in parallel
+    all_features = []
+    
+    # Use conservative max_workers to avoid overwhelming the server
+    actual_max_workers = min(max_workers, MAX_CONCURRENT_REQUESTS)  # Hard cap at MAX_CONCURRENT_REQUESTS concurrent requests
+    
+    with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
+        # Submit all batch fetch tasks
+        future_to_batch = {}
+        for batch_ids, batch_num in batches:
+            future = executor.submit(
+                _rest_fetch_oid_batch,
+                session, layer_url, base_params, oid_field, batch_ids, batch_num, layer_name
+            )
+            future_to_batch[future] = batch_num
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_batch):
+            batch_num = future_to_batch[future]
+            try:
+                features, success, batch_request_count = future.result()
+                metrics["request_count"] += batch_request_count
+                
+                if success:
+                    metrics["batches_ok"] += 1
+                    if features:
+                        all_features.extend(features)
+                        metrics["features_total"] += len(features)
+                        log.debug(f"[REST] {layer_name}: completed batch {batch_num} with {len(features)} features")
+                else:
+                    log.warning(f"[REST] {layer_name}: failed batch {batch_num}")
+                    
+            except Exception as e:
+                log.error(f"[REST] {layer_name}: batch {batch_num} raised exception: {e}")
+    
+    log.info(f"[REST] {layer_name}: parallel fetch completed - {metrics['batches_ok']}/{metrics['batches_total']} batches successful, {metrics['features_total']} total features in {metrics['request_count']} requests")
+    
+    return all_features, metrics

@@ -1,0 +1,60 @@
+# Example configuration showing use_oid_sweep functionality for ArcGIS REST downloads
+
+defaults:
+  bbox: [610000, 6550000, 700000, 6650000]  
+  bbox_sr: 3006
+
+sources:
+# Example 1: Large REST layer with parallel OID-batch downloading enabled
+- name: NVDB_vag
+  type: rest
+  authority: NVDB
+  url: https://example.com/rest/services/NVDB/MapServer/2
+  enabled: true
+  raw:
+    use_oid_sweep: true      # Enable parallel OID-based downloading
+    page_size: 1000          # Batch size (default: 1000)
+    max_workers: 6           # Concurrent threads (default: 6)
+    response_format: esrijson   # esrijson | geojson
+    stage_sr: 3006              # 4326 if geojson
+    target_sr: 3006             # final SR for SDE
+    geo_transform: "WGS_1984_To_ETRS_1989"  # only used if stage_sr != target_sr
+    where: "STATUS = 'ACTIVE'"  # Optional filter
+
+# Example 2: Traditional offset pagination (default behavior)  
+- name: SmallLayer
+  type: rest
+  authority: TEST
+  url: https://example.com/rest/services/Small/MapServer/0
+  enabled: true
+  raw:
+    # use_oid_sweep: false  # Default - use offset pagination with OID fallback
+    response_format: esrijson
+    stage_sr: 3006
+    target_sr: 3006
+
+# Example 3: Conservative parallel settings for slower servers
+- name: SlowServer
+  type: rest
+  authority: SLOW
+  url: https://slow-server.com/rest/services/Data/MapServer/1
+  enabled: true
+  raw:
+    use_oid_sweep: true
+    page_size: 500           # Smaller batches
+    max_workers: 3           # Fewer concurrent requests
+    response_format: esrijson
+    stage_sr: 3006
+    target_sr: 3006
+
+# Example 4: GeoJSON output format
+- name: GeoJSONLayer
+  type: rest
+  authority: GEO
+  url: https://example.com/rest/services/Geo/MapServer/0
+  enabled: true
+  raw:
+    response_format: geojson  # Request data in GeoJSON format
+    stage_sr: 4326           # WGS84 for GeoJSON staging
+    target_sr: 3006          # Project to SWEREF99 TM for final output
+    geo_transform: "WGS_1984_To_ETRS_1989"
