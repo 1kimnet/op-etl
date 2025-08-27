@@ -1,599 +1,580 @@
 """
-Robust HTTP utilities for OP-ETL pipeline.
-Uses urllib as primary HTTP library with requests as fallback for HTTPS when needed.
-Fixed recursion issues by switching away from requests as the primary method.
+http_utils.py — Reliable HTTP utilities for OP-ETL (backward-compatible)
+
+Design:
+- urllib3-only core (no requests)
+- No implicit Portal probing, redirects disabled by default
+- Clear logging; fail fast, fail clearly
+- Safe JSON/XML parsing with size and depth limits
+- Backward-compatibility shims for:
+  - RecursionSafeSession.safe_get(...)
+  - download_with_retries(...)
+  - safe_xml_parse(...)
+  - validate_response_content(...)
+
+Config knobs can be provided via the HttpClient(cfg=...) dict.
 """
+
+from __future__ import annotations
 
 import json
 import logging
-import os
-import sys
 import time
-import urllib.request
-import urllib.error
 import xml.etree.ElementTree as ET
-import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import requests
+import urllib3
+from urllib3 import PoolManager
+from urllib3.util.retry import Retry
+from urllib3.util.timeout import Timeout
+
+# --------------------------------------------------------------------------------------
+# Constants / defaults (match previous file names so other modules won't whine)
+# --------------------------------------------------------------------------------------
+
+MAX_RESPONSE_SIZE_MB = 100            # in-memory response cap
+MAX_DOWNLOAD_SIZE_MB = 5_000          # download cap
+DEFAULT_TIMEOUT = 60                  # seconds (read timeout)
+DEFAULT_CONNECT_TIMEOUT = 10.0
+DEFAULT_READ_TIMEOUT = 60.0
+DEFAULT_TOTAL_RETRIES = 5
+DEFAULT_BACKOFF_FACTOR = 0.5
+DEFAULT_ALLOWED_METHODS = frozenset({"GET", "HEAD"})
+DEFAULT_STATUS_FORCELIST = (429, 500, 502, 503, 504)
+MAX_JSON_DEPTH = 100                  # kept for parity with older name
+DEFAULT_FOLLOW_REDIRECTS = False
+
+# Legacy recursion-related constants/functions kept for import-compat
+DEFAULT_RECURSION_LIMIT = 3000
+
+def get_current_recursion_depth() -> int:
+    """Legacy shim: returns a constant depth. We don't play recursion games here."""
+    return 0
+
+def check_recursion_safety(threshold_ratio: float = 0.8) -> bool:
+    """Legacy shim: always safe. Kept to avoid breaking imports."""
+    return True
+
+# Type helper
+BytesLike = Union[str, bytes, bytearray, memoryview]
 
 log = logging.getLogger(__name__)
 
-# Constants for safety limits
-MAX_RESPONSE_SIZE_MB = 100
-DEFAULT_TIMEOUT = 60
-MAX_JSON_DEPTH = 100  # Explicit JSON recursion depth limit
-DEFAULT_RECURSION_LIMIT = 3000
+# --------------------------------------------------------------------------------------
+# Normalizers and small helpers
+# --------------------------------------------------------------------------------------
 
-def get_current_recursion_depth():
-    """Get the current recursion depth by walking the stack."""
-    return len(inspect.stack())
+def _normalize_bytes(value: Optional[BytesLike]) -> Optional[bytes]:
+    """Normalize str/bytes/bytearray/memoryview to bytes, or None."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    return str(value).encode("utf-8", errors="replace")
 
-def check_recursion_safety(threshold_ratio: float = 0.8) -> bool:
-    """Check if we're approaching the recursion limit."""
-    current_depth = get_current_recursion_depth()
-    limit = sys.getrecursionlimit()
-    ratio = current_depth / limit
-    
-    if ratio > threshold_ratio:
-        log.warning(f"[RECURSION] Close to limit: {current_depth}/{limit} ({ratio:.1%})")
-        return False
-    return True
+def _to_text(value: Optional[BytesLike]) -> Optional[str]:
+    """Normalize str/bytes/bytearray/memoryview to str, or None."""
+    raw = _normalize_bytes(value)
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return raw.decode("latin-1", errors="replace")
 
+def _json_depth(obj: Any, depth: int = 0, max_depth: int = MAX_JSON_DEPTH) -> int:
+    """Return observed JSON depth; stop early if above max_depth."""
+    if depth > max_depth:
+        return depth
+    if isinstance(obj, dict):
+        if not obj:
+            return depth + 1
+        return max(_json_depth(v, depth + 1, max_depth) for v in obj.values())
+    if isinstance(obj, list):
+        if not obj:
+            return depth + 1
+        return max(_json_depth(v, depth + 1, max_depth) for v in obj)
+    return depth
+
+def _bytes_too_large(data: bytes, limit_mb: int) -> bool:
+    return len(data) > limit_mb * 1024 * 1024
+
+# --------------------------------------------------------------------------------------
+# Response container
+# --------------------------------------------------------------------------------------
 
 @dataclass
 class SimpleResponse:
-    """A simple dataclass to hold response data, avoiding recursion issues."""
     status_code: int
-    headers: Dict[str, str]  # Changed to str instead of Any
+    headers: Dict[str, str]
     content: bytes
     url: str
 
-    def json(self) -> Any:
-        """Safely parse response content as JSON."""
-        return safe_json_parse(self.content)
+    def text(self) -> str:
+        return _to_text(self.content) or ""
 
+    def json(self, max_depth: int = MAX_JSON_DEPTH) -> Optional[Dict[str, Any]]:
+        return safe_json_parse(self.content, max_depth=max_depth)
 
-class RecursionSafeSession:
-    """A robust, simplified HTTP session that uses urllib as primary and avoids recursion issues.
-    
-    Uses urllib as the primary HTTP library for all requests, with requests as a fallback 
-    for HTTPS requests only when urllib fails. This approach provides better stability 
-    and avoids the maximum recursion depth errors that frequently occur with requests.
+# --------------------------------------------------------------------------------------
+# Core client
+# --------------------------------------------------------------------------------------
+
+class HttpClient:
+    """
+    Thin wrapper around urllib3.PoolManager with sensible defaults.
+
+    - Retries: idempotent methods with backoff; respects Retry-After
+    - Timeouts: bounded via urllib3.Timeout
+    - Redirects: disabled by default (avoid Portal sign-in flows)
+    - Size caps: guard rails for responses and downloads
     """
 
-    def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
-        # Ensure recursion limit is set high enough as a safety net
-        current_limit = sys.getrecursionlimit()
-        if current_limit < DEFAULT_RECURSION_LIMIT:
-            sys.setrecursionlimit(DEFAULT_RECURSION_LIMIT)
-            log.debug(f"[HTTP] Increased recursion limit from {current_limit} to {DEFAULT_RECURSION_LIMIT}")
+    def __init__(
+        self,
+        *,
+        total_retries: int = DEFAULT_TOTAL_RETRIES,
+        backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+        allowed_methods = DEFAULT_ALLOWED_METHODS,
+        status_forcelist = DEFAULT_STATUS_FORCELIST,
+        follow_redirects: bool = DEFAULT_FOLLOW_REDIRECTS,
+        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+        num_pools: int = 20,
+        headers: Optional[Dict[str, str]] = None,
+        cfg: Optional[Dict[str, Any]] = None
+    ) -> None:
 
-        self.max_retries = max_retries
-        self.backoff_factor = backoff_factor
+        if cfg:
+            total_retries   = cfg.get("http_total_retries", total_retries)
+            backoff_factor  = cfg.get("http_backoff_factor", backoff_factor)
+            allowed_methods = frozenset(cfg.get("http_allowed_methods", list(allowed_methods)))
+            status_forcelist= tuple(cfg.get("http_status_forcelist", list(status_forcelist)))
+            follow_redirects= bool(cfg.get("http_follow_redirects", follow_redirects))
+            connect_timeout = float(cfg.get("http_connect_timeout", connect_timeout))
+            read_timeout    = float(cfg.get("http_read_timeout", read_timeout))
+            num_pools       = int(cfg.get("http_num_pools", num_pools))
 
-    def _get_with_urllib(self, url: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> Optional[SimpleResponse]:
-        """Primary method using urllib for all HTTP requests. Renamed from fallback to reflect new primary status."""
-        log.debug(f"[HTTP] Using urllib (primary) for: {url}")
-        
+        self.follow_redirects = follow_redirects
+
+        retry = Retry(
+            total=total_retries,
+            connect=total_retries,
+            read=total_retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+            allowed_methods=allowed_methods,
+            raise_on_status=False,
+            respect_retry_after_header=True
+        )
+
+        self._timeout = Timeout(connect=connect_timeout, read=read_timeout)
+        self._http: PoolManager = urllib3.PoolManager(
+            num_pools=num_pools,
+            retries=retry,
+            timeout=self._timeout
+        )
+
+        self._default_headers = {
+            "User-Agent": "op-etl/1.0 (geospatial-data-pipeline)",
+            "Accept": "application/json, text/xml, text/plain, */*",
+            "Accept-Encoding": "gzip, deflate"
+        }
+        if headers:
+            self._default_headers.update(headers)
+
+    def _build_url(self, url: str, params: Optional[Dict[str, Any]]) -> str:
+        if not params:
+            return url
+        from urllib.parse import urlencode
+        qs = urlencode(params, doseq=True)
+        return f"{url}&{qs}" if "?" in url else f"{url}?{qs}"
+
+    def _merge_headers(self, headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+        if not headers:
+            return dict(self._default_headers)
+        out = dict(self._default_headers)
+        out.update(headers)
+        return out
+
+    def _resolve_redirect_flag(self, allow_redirects: Optional[bool]) -> bool:
+        if allow_redirects is None:
+            return self.follow_redirects
+        return bool(allow_redirects)
+
+    # ---------------------- Public methods ----------------------
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allow_redirects: Optional[bool] = None,
+        max_response_mb: int = MAX_RESPONSE_SIZE_MB
+    ) -> Optional[SimpleResponse]:
         try:
-            headers = {
-                'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                'Accept': 'application/json, text/html, */*',
-                'Accept-Encoding': 'gzip, deflate'
-            }
-            
-            # Add any custom headers passed in kwargs
-            if 'headers' in kwargs:
-                headers.update(kwargs['headers'])
-            
-            # Handle params if provided (similar to requests)
-            if 'params' in kwargs and kwargs['params']:
-                from urllib.parse import urlencode
-                param_string = urlencode(kwargs['params'])
-                url = f"{url}?{param_string}" if '?' not in url else f"{url}&{param_string}"
-            
-            req = urllib.request.Request(url, headers=headers)
-            
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                content = response.read()
-                
-                # Handle gzip decompression if needed
-                try:
-                    import gzip
-                    encoding = response.headers.get('content-encoding', '').lower()
-                    if encoding == 'gzip' and content:
-                        content = gzip.decompress(content)
-                except Exception as e:
-                    log.debug(f"[HTTP] Gzip decompression failed, using raw content: {e}")
-                
-                # Check for empty content
-                if not content:
-                    log.warning(f"[HTTP] Urllib received empty response from {url}")
-                    return None
-                
-                # Check content size
-                if len(content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                    log.warning(f"[HTTP] Response too large: {len(content)} bytes")
-                    return None
-                
-                # Extract basic headers
-                safe_headers = {}
-                for header_name, header_value in response.headers.items():
-                    safe_headers[str(header_name).lower()] = str(header_value)
-                
-                # Ensure content-length is set (update after potential decompression)
-                safe_headers['content-length'] = str(len(content))
-                
-                log.debug(f"[HTTP] Success: {url} ({response.getcode()}, {len(content)} bytes)")
-                
-                return SimpleResponse(
-                    status_code=response.getcode() or 200,
-                    headers=safe_headers,
-                    content=content,
-                    url=response.geturl() or url
-                )
-                
-        except urllib.error.HTTPError as e:
-            log.error(f"[HTTP] Urllib HTTP error for {url}: {e.code} {e.reason}")
-            return None
-        except urllib.error.URLError as e:
-            log.error(f"[HTTP] Urllib URL error for {url}: {e.reason}")
-            return None
-        except Exception as e:
-            log.error(f"[HTTP] Urllib unexpected error for {url}: {e}")
-            return None
+            full_url = self._build_url(url, params)
+            hdrs = self._merge_headers(headers)
+            follow = self._resolve_redirect_flag(allow_redirects)
 
-    def _fallback_get_requests(self, url: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> Optional[SimpleResponse]:
-        """Fallback method using requests for HTTPS requests when urllib fails."""
-        log.info(f"[HTTP] Using requests fallback for HTTPS: {url}")
-        
-        try:
-            # Create session with proper cleanup
-            session = requests.Session()
+            log.info("GET %s", full_url)
+            r = self._http.request("GET", full_url, headers=hdrs, redirect=follow, preload_content=False)
             try:
-                session.headers.update({
-                    'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                    'Accept': 'application/json, text/html, */*',
-                    'Accept-Encoding': 'gzip, deflate',
-                    'Connection': 'close'
-                })
+                status = int(r.status or 0)
 
-                # Make request without 'with' statement to avoid context manager issues
-                response = session.get(url, timeout=timeout, stream=True, **kwargs)
+                if not follow and 300 <= status < 400:
+                    loc = r.headers.get("Location")
+                    log.error("Redirect blocked: %s -> %s", full_url, loc)
+                    r.release_conn()
+                    return None
 
-                try:
-                    response.raise_for_status()
+                content = r.read()
+                r.release_conn()
 
-                    # Check content length with recursion protection
-                    content_length = None
-                    try:
-                        content_length = response.headers.get('content-length')
-                    except RecursionError:
-                        log.warning(f"[HTTP] Recursion error accessing content-length header for {url}")
-                        content_length = None
-                    except Exception as e:
-                        log.debug(f"[HTTP] Error accessing content-length: {e}")
-                        content_length = None
+                if _bytes_too_large(content, max_response_mb):
+                    log.warning("Response too large: %s bytes (> %s MB)", len(content), max_response_mb)
+                    return None
 
-                    if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                        log.warning(f"[HTTP] Response too large: {content_length} bytes")
-                        return None
+                headers_out = {str(k).lower(): str(v) for k, v in r.headers.items()}
+                headers_out["content-length"] = str(len(content))
 
-                    # Read content in chunks with recursion protection
-                    content = b''
-                    total_size = 0
-                    try:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                total_size += len(chunk)
-                                if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                    log.warning(f"[HTTP] Response size exceeded limit: {total_size} bytes")
-                                    return None
-                                content += chunk
-                    except RecursionError:
-                        log.error(f"[HTTP] Recursion error reading response content for {url}")
-                        return None
-
-                    log.debug(f"[HTTP] Success: {url} ({response.status_code}, {len(content)} bytes)")
-
-                    # Extract status code safely
-                    status_code = 200  # Default fallback
-                    try:
-                        status_code = response.status_code
-                    except RecursionError:
-                        log.warning(f"[HTTP] Recursion error accessing status code for {url}")
-                    except Exception:
-                        pass
-
-                    # Extract URL safely
-                    response_url = url  # Fallback to original URL
-                    try:
-                        response_url = response.url
-                    except RecursionError:
-                        log.warning(f"[HTTP] Recursion error accessing response URL for {url}")
-                    except Exception:
-                        pass
-
-                    # Extract headers safely with multiple fallback levels
-                    safe_headers = {}
-                    try:
-                        # First attempt: normal header extraction
-                        for key, value in response.headers.items():
-                            safe_headers[str(key).lower()] = str(value)
-                    except RecursionError:
-                        log.warning(f"[HTTP] Recursion error extracting headers for {url}")
-                        # Fallback: try to get essential headers only
-                        try:
-                            safe_headers = {
-                                'content-type': str(response.headers.get('content-type', 'application/octet-stream')),
-                                'content-length': str(len(content))
-                            }
-                        except RecursionError:
-                            # Final fallback: minimal headers
-                            safe_headers = {
-                                'content-type': 'application/octet-stream',
-                                'content-length': str(len(content))
-                            }
-                    except Exception as e:
-                        log.debug(f"[HTTP] Header extraction warning: {e}")
-                        # Fall back to minimal headers
-                        safe_headers = {
-                            'content-type': 'application/octet-stream',
-                            'content-length': str(len(content))
-                        }
-
-                    # Create response object with safe headers
-                    return SimpleResponse(
-                        status_code=status_code,
-                        headers=safe_headers,
-                        content=content,
-                        url=response_url
-                    )
-                finally:
-                    # Ensure response is closed with recursion protection
-                    try:
-                        response.close()
-                    except RecursionError:
-                        log.debug(f"[HTTP] Recursion error closing response for {url}")
-                    except Exception:
-                        pass
+                return SimpleResponse(
+                    status_code=status or 200,
+                    headers=headers_out,
+                    content=content,
+                    url=getattr(r, "geturl", lambda: full_url)()
+                )
             finally:
-                # Ensure session is closed with recursion protection
                 try:
-                    session.close()
-                except RecursionError:
-                    log.debug(f"[HTTP] Recursion error closing session for {url}")
+                    r.close()
                 except Exception:
                     pass
 
-        except RecursionError as e:
-            log.error(f"[HTTP] Recursion error in requests fallback for {url}: {e}")
-            return None
-        except requests.exceptions.RequestException as e:
-            log.error(f"[HTTP] Requests fallback failed for {url}: {e}")
+        except urllib3.exceptions.MaxRetryError as e:
+            log.error("HTTP retries exhausted for %s: %s", url, e)
             return None
         except Exception as e:
-            log.error(f"[HTTP] Unexpected error in requests fallback for {url}: {e}")
+            log.error("HTTP error for %s: %s", url, e)
             return None
 
-    def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT,
-                 **kwargs) -> Optional[SimpleResponse]:
-        """Perform a safe GET request with retries. Uses urllib as primary, requests as fallback for HTTPS."""
-        log.debug(f"[HTTP] Requesting: {url}")
-        
-        # Check recursion safety before starting
-        if not check_recursion_safety():
-            log.warning(f"[HTTP] Recursion depth too high, using urllib with minimal retries for {url}")
-            return self._get_with_urllib(url, timeout, **kwargs)
+    def get_json(
+        self,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allow_redirects: Optional[bool] = None,
+        max_response_mb: int = MAX_RESPONSE_SIZE_MB,
+        max_json_depth: int = MAX_JSON_DEPTH
+    ) -> Optional[Dict[str, Any]]:
+        resp = self.get(url, params=params, headers=headers, allow_redirects=allow_redirects, max_response_mb=max_response_mb)
+        if not resp:
+            return None
+        return safe_json_parse(resp.content, max_depth=max_json_depth)
 
-        for attempt in range(self.max_retries + 1):
+    def get_xml(
+        self,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allow_redirects: Optional[bool] = None,
+        max_response_mb: int = MAX_RESPONSE_SIZE_MB,
+        max_elements: int = 10000
+    ) -> Optional[ET.Element]:
+        resp = self.get(url, params=params, headers=headers, allow_redirects=allow_redirects, max_response_mb=max_response_mb)
+        if not resp:
+            return None
+        return safe_xml_parse(resp.content, max_elements=max_elements)
+
+    def download_file(
+        self,
+        url: str,
+        output_path: Path,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        allow_redirects: Optional[bool] = None,
+        max_download_mb: int = MAX_DOWNLOAD_SIZE_MB,
+        chunk_size: int = 1 << 15  # 32 KiB
+    ) -> bool:
+        try:
+            full_url = self._build_url(url, params)
+            hdrs = self._merge_headers(headers)
+            follow = self._resolve_redirect_flag(allow_redirects)
+
+            log.info("DOWNLOAD %s -> %s", full_url, output_path)
+            r = self._http.request("GET", full_url, headers=hdrs, redirect=follow, preload_content=False)
             try:
-                # PRIMARY: Try urllib first (this is now the main approach)
-                result = self._get_with_urllib(url, timeout, **kwargs)
-                if result:
-                    return result
-                
-                # FALLBACK: Use requests only for HTTPS URLs when urllib fails
-                if url.lower().startswith('https://'):
-                    log.info(f"[HTTP] Urllib failed for HTTPS URL, trying requests fallback: {url}")
-                    result = self._fallback_get_requests(url, timeout, **kwargs)
-                    if result:
-                        return result
-                
-                # If we get here, both methods failed
-                if attempt < self.max_retries:
-                    wait_time = self.backoff_factor * (2 ** attempt)
-                    log.debug(f"[HTTP] Attempt {attempt + 1} failed, retrying in {wait_time}s")
-                    time.sleep(wait_time)
+                status = int(r.status or 0)
+
+                if not follow and 300 <= status < 400:
+                    loc = r.headers.get("Location")
+                    log.error("Redirect blocked (download): %s -> %s", full_url, loc)
+                    r.release_conn()
+                    return False
+
+                # size hint by header
+                try:
+                    length_header = r.headers.get("Content-Length")
+                    if length_header and int(length_header) > max_download_mb * 1024 * 1024:
+                        log.warning("File too large by header: %s bytes", length_header)
+                        r.release_conn()
+                        return False
+                except Exception:
+                    pass
+
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                total = 0
+                with open(output_path, "wb") as f:
+                    while True:
+                        chunk = r.read(chunk_size)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_download_mb * 1024 * 1024:
+                            log.warning("Download exceeded limit: %s bytes (> %s MB)", total, max_download_mb)
+                            try:
+                                f.close()
+                            finally:
+                                try:
+                                    output_path.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            r.release_conn()
+                            return False
+                        f.write(chunk)
+
+                r.release_conn()
+
+                ok = output_path.exists() and output_path.stat().st_size > 0
+                if ok:
+                    log.info("DOWNLOAD OK: %s (%s bytes)", output_path.name, output_path.stat().st_size)
                 else:
-                    log.error(f"[HTTP] All methods failed after {self.max_retries + 1} attempts for {url}")
-                    return None
-                    
-            except Exception as e:
-                log.error(f"[HTTP] Unexpected error for {url}: {e}")
-                if attempt < self.max_retries:
-                    wait_time = self.backoff_factor * (2 ** attempt)
-                    log.debug(f"[HTTP] Retrying in {wait_time}s after error")
-                    time.sleep(wait_time)
-                else:
-                    return None
+                    log.warning("Downloaded file missing or empty: %s", output_path)
+                return ok
 
-        return None
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
 
+        except urllib3.exceptions.MaxRetryError as e:
+            log.error("HTTP retries exhausted for %s: %s", url, e)
+            return False
+        except Exception as e:
+            log.error("Download error for %s: %s", url, e)
+            return False
 
-def safe_json_parse(content: Union[str, bytes], max_size_mb: int = 50) -> Optional[Dict[str, Any]]:
-    """Safely parse JSON with size and complexity limits."""
+# --------------------------------------------------------------------------------------
+# Safe parsers (module-level)
+# --------------------------------------------------------------------------------------
+
+def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int = MAX_JSON_DEPTH) -> Optional[Dict[str, Any]]:
+    """Safely parse JSON with size and depth limits."""
     try:
-        # Check recursion safety first
-        if not check_recursion_safety():
-            log.warning("[JSON] Recursion depth too high, skipping JSON parsing")
-            return None
-            
-        # Add null check
-        if content is None:
+        text = _to_text(content)
+        if text is None:
             log.warning("[JSON] Content is None")
             return None
 
-        # Convert bytes to string if needed
-        if isinstance(content, bytes):
-            content = content.decode('utf-8', errors='replace')
-
-        # Check for empty content after conversion
-        if not content or len(content.strip()) == 0:
+        if not text.strip():
             log.warning("[JSON] Content is empty or whitespace-only")
             return None
 
-        # Check content size
-        if len(content) > max_size_mb * 1024 * 1024:
-            log.warning(f"[JSON] Content too large: {len(content)} bytes")
+        if len(text) > max_size_mb * 1024 * 1024:
+            log.warning("[JSON] Content too large: %s bytes", len(text))
             return None
-
-        # Check for obviously problematic content
-        if isinstance(content, str):
-            brace_count = sum(1 for c in content if c == '{')
-            bracket_count = sum(1 for c in content if c == '[')
-            if brace_count > 50000 or bracket_count > 50000:
-                log.warning("[JSON] Content appears to have excessive nesting")
-                return None
 
         # Parse with standard library
         try:
             data = json.loads(content)
 
             # Validate depth after parsing
-            if _check_json_depth(data) > MAX_JSON_DEPTH:
-                log.warning(f"[JSON] Exceeds maximum nesting depth of {MAX_JSON_DEPTH}")
+            if _json_depth(data, 0, max_depth) > max_depth:
+                log.warning(f"[JSON] Exceeds maximum nesting depth of {max_depth}")
                 return None
 
             return data
         except json.JSONDecodeError as e:
             log.error(f"[JSON] Parse error: {e}")
             return None
-        except RecursionError as e:
-            log.error(f"[JSON] Recursion error during parsing: {e}")
+
+        data = json.loads(text)
+
+        if _json_depth(data, 0, max_depth) > max_depth:
+            log.warning("[JSON] Exceeds maximum nesting depth of %s", max_depth)
             return None
 
+        return data
+
+    except json.JSONDecodeError as e:
+        log.error("[JSON] Parse error: %s", e)
+        return None
     except Exception as e:
-        log.error(f"[JSON] Unexpected error: {e}")
+        log.error("[JSON] Unexpected error: %s", e)
         return None
 
-
-def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
-    """Helper function to check the depth of a JSON object."""
-    if current_depth > MAX_JSON_DEPTH:
-        return current_depth
-
-    if isinstance(obj, dict):
-        if not obj:
-            return current_depth + 1
-        return max(_check_json_depth(v, current_depth + 1) for v in obj.values())
-    elif isinstance(obj, list):
-        if not obj:
-            return current_depth + 1
-        return max(_check_json_depth(v, current_depth + 1) for v in obj)
-    else:
-        return current_depth
-
-
-def safe_xml_parse(content: Union[str, bytes], max_elements: int = 10000) -> Optional[ET.Element]:
-    """Safely parse XML with element count limits."""
+def safe_xml_parse(content: BytesLike, *, max_elements: int = 10_000, max_size_mb: int = MAX_RESPONSE_SIZE_MB) -> Optional[ET.Element]:
+    """Safely parse XML with element count and size limits."""
     try:
-        # Check recursion safety first
-        if not check_recursion_safety():
-            log.warning("[XML] Recursion depth too high, skipping XML parsing")
-            return None
-            
-        if content is None:
+        raw = _normalize_bytes(content)
+        if raw is None:
             log.warning("[XML] Content is None")
             return None
 
-        if isinstance(content, str):
-            content = content.encode('utf-8')
-
-        # Check content size
-        if len(content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-            log.warning(f"[XML] Content too large: {len(content)} bytes")
+        if _bytes_too_large(raw, max_size_mb):
+            log.warning("[XML] Content too large: %s bytes", len(raw))
             return None
 
-        # Check for XML bombs
-        if isinstance(content, bytes):
-            entity_count = content.count(b'<!ENTITY')
-            if entity_count > 0:
-                log.warning("[XML] Potentially dangerous XML with ENTITY declarations")
-                return None
-
-            element_count = content.count(b'<')
-            if element_count > max_elements:
-                log.warning(f"[XML] Too many elements: {element_count} > {max_elements}")
-                return None
-
-            try:
-                parser = ET.XMLParser(encoding='utf-8')
-                root = ET.fromstring(content, parser=parser)
-                return root
-            except ET.ParseError as e:
-                log.error(f"[XML] Parse error: {e}")
-                return None
-            except RecursionError as e:
-                log.error(f"[XML] Recursion error during parsing: {e}")
-                return None
-        else:
-            log.warning("[XML] Content is not bytes after conversion")
+        if raw.count(b"<!ENTITY") > 0:
+            log.warning("[XML] Potentially dangerous XML with ENTITY declarations")
             return None
 
+        if raw.count(b"<") > max_elements:
+            log.warning("[XML] Too many elements: > %s", max_elements)
+            return None
+
+        parser = ET.XMLParser(encoding="utf-8")
+        return ET.fromstring(raw, parser=parser)
+
+    except ET.ParseError as e:
+        log.error("[XML] Parse error: %s", e)
+        return None
     except Exception as e:
-        log.error(f"[XML] Unexpected error: {e}")
+        log.error("[XML] Unexpected error: %s", e)
         return None
 
-
-def download_with_retries(url: str, output_path: Path,
-                          max_retries: int = 3,
-                          timeout: int = DEFAULT_TIMEOUT) -> bool:
-    """Download a file with retries and safety checks. Uses urllib as primary, requests as fallback for HTTPS."""
-    for attempt in range(1, max_retries + 1):
-        try:
-            log.info(f"[DOWNLOAD] Attempt {attempt}/{max_retries}: {url}")
-
-            # PRIMARY: Try urllib first (consistent with RecursionSafeSession approach)
-            try:
-                headers = {
-                    'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                    'Accept': '*/*'
-                }
-                
-                req = urllib.request.Request(url, headers=headers)
-                
-                with urllib.request.urlopen(req, timeout=timeout) as response:
-                    # Get content length if available
-                    content_length = response.headers.get('content-length')
-                    if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                        log.warning(f"[DOWNLOAD] File too large: {content_length} bytes")
-                        return False
-
-                    # Create directory if needed
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-                    # Stream directly to file
-                    with open(output_path, 'wb') as f:
-                        total_size = 0
-                        while True:
-                            chunk = response.read(8192)
-                            if not chunk:
-                                break
-                            total_size += len(chunk)
-                            if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                log.warning(f"[DOWNLOAD] Size exceeded limit: {total_size} bytes")
-                                f.close()
-                                if output_path.exists():
-                                    try:
-                                        os.unlink(output_path)
-                                    except OSError:
-                                        pass
-                                return False
-                            f.write(chunk)
-
-                # Verify download
-                if output_path.exists() and output_path.stat().st_size > 0:
-                    log.info(f"[DOWNLOAD] Success: {output_path.name} ({output_path.stat().st_size} bytes)")
-                    return True
-                else:
-                    log.warning("[DOWNLOAD] Downloaded file is empty or missing")
-
-            except (urllib.error.HTTPError, urllib.error.URLError) as e:
-                # FALLBACK: Use requests for HTTPS URLs when urllib fails
-                if url.lower().startswith('https://'):
-                    log.info(f"[DOWNLOAD] Urllib failed for HTTPS, trying requests fallback: {e}")
-                    
-                    # Create a fresh session for each download attempt
-                    session = requests.Session()
-                    try:
-                        session.headers.update({
-                            'User-Agent': 'op-etl/1.0 (geospatial-data-pipeline)',
-                            'Accept': '*/*',
-                            'Connection': 'close'
-                        })
-
-                        # Use streaming to handle large files
-                        response = session.get(url, stream=True, timeout=timeout)
-                        try:
-                            response.raise_for_status()
-
-                            # Get content length if available
-                            content_length = response.headers.get('content-length')
-                            if content_length and int(content_length) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                log.warning(f"[DOWNLOAD] File too large: {content_length} bytes")
-                                return False
-
-                            # Create directory if needed
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-                            # Stream directly to file
-                            with open(output_path, 'wb') as f:
-                                total_size = 0
-                                for chunk in response.iter_content(chunk_size=8192):
-                                    if chunk:
-                                        total_size += len(chunk)
-                                        if total_size > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-                                            log.warning(f"[DOWNLOAD] Size exceeded limit: {total_size} bytes")
-                                            f.close()
-                                            if output_path.exists():
-                                                try:
-                                                    os.unlink(output_path)
-                                                except OSError:
-                                                    pass
-                                            return False
-                                        f.write(chunk)
-                        finally:
-                            response.close()
-                    finally:
-                        session.close()
-
-                    # Verify download
-                    if output_path.exists() and output_path.stat().st_size > 0:
-                        log.info(f"[DOWNLOAD] Success: {output_path.name} ({output_path.stat().st_size} bytes)")
-                        return True
-                    else:
-                        log.warning("[DOWNLOAD] Downloaded file is empty or missing")
-                else:
-                    # Re-raise for non-HTTPS URLs since fallback only applies to HTTPS
-                    raise
-
-        except Exception as e:
-            log.warning(f"[DOWNLOAD] Attempt {attempt} failed: {e}")
-
-        # Wait before retry
-        if attempt < max_retries:
-            wait_time = 0.5 * (2 ** (attempt - 1))
-            log.info(f"[DOWNLOAD] Waiting {wait_time:.1f}s before retry...")
-            time.sleep(wait_time)
-
-    log.error(f"[DOWNLOAD] Failed after {max_retries} attempts: {url}")
-    return False
-
-
 def validate_response_content(response: SimpleResponse) -> bool:
-    """Basic response validation for SimpleResponse."""
+    """Basic response validation for SimpleResponse (kept for backward-compat)."""
     try:
-        # Check for empty content
         if not response.content or len(response.content) == 0:
             log.warning("[VALIDATE] Response content is empty")
             return False
-            
-        content_type = response.headers.get('content-type', '').lower()
+
+        content_type = response.headers.get("content-type", "").lower()
 
         if len(response.content) > MAX_RESPONSE_SIZE_MB * 1024 * 1024:
-            log.warning(f"[VALIDATE] Response too large: {len(response.content)} bytes")
+            log.warning("[VALIDATE] Response too large: %s bytes", len(response.content))
             return False
 
-        if 'text/html' in content_type and b'error' in response.content.lower()[:1024]:
+        if "text/html" in content_type and b"error" in response.content.lower()[:1024]:
             log.warning("[VALIDATE] Response appears to be an error page")
             return False
 
         return True
-
     except Exception as e:
-        log.warning(f"[VALIDATE] Validation error: {e}")
+        log.warning("[VALIDATE] Validation error: %s", e)
         return False
+
+# --------------------------------------------------------------------------------------
+# Legacy compatibility layer
+# --------------------------------------------------------------------------------------
+
+class RecursionSafeSession:
+    """
+    Backward-compatible shim around HttpClient.
+    Provides .safe_get(...) returning SimpleResponse like the old class.
+    """
+
+    def __init__(self, max_retries: int = 3, backoff_factor: float = 0.5):
+        self._client = HttpClient(
+            total_retries=max_retries,
+            backoff_factor=backoff_factor,
+            follow_redirects=False,
+            connect_timeout=DEFAULT_CONNECT_TIMEOUT,
+            read_timeout=DEFAULT_READ_TIMEOUT,
+        )
+
+    def safe_get(self, url: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> Optional[SimpleResponse]:
+        # Map legacy args to new client
+        params = kwargs.get("params")
+        headers = kwargs.get("headers")
+        allow_redirects = kwargs.get("allow_redirects", None)
+        # HttpClient already has read timeout set; urllib3 Timeout is bound at PoolManager level
+        return self._client.get(
+            url,
+            params=params,
+            headers=headers,
+            allow_redirects=allow_redirects,
+            max_response_mb=MAX_RESPONSE_SIZE_MB
+        )
+
+def download_with_retries(
+    url: str,
+    output_path: Path,
+    *,
+    max_retries: int = 3,
+    timeout: int = DEFAULT_TIMEOUT
+) -> bool:
+    """
+    Backward-compatible function. Uses HttpClient.download_file with exponential backoff.
+    """
+    client = HttpClient(read_timeout=timeout)
+    for attempt in range(1, max_retries + 1):
+        try:
+            log.info("[DOWNLOAD] Attempt %s/%s: %s", attempt, max_retries, url)
+            ok = client.download_file(url, output_path)
+            if ok:
+                return True
+            raise RuntimeError("download failed")
+        except Exception as e:
+            log.warning("[DOWNLOAD] Attempt %s failed: %s", attempt, e)
+            if attempt < max_retries:
+                wait = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1))
+                log.info("[DOWNLOAD] Waiting %.1fs before retry...", wait)
+                time.sleep(wait)
+    log.error("[DOWNLOAD] Failed after %s attempts: %s", max_retries, url)
+    return False
+
+# --------------------------------------------------------------------------------------
+# Convenience wrappers (optional)
+# --------------------------------------------------------------------------------------
+
+_default_client: Optional[HttpClient] = None
+
+def _client() -> HttpClient:
+    global _default_client
+    if _default_client is None:
+        _default_client = HttpClient()
+    return _default_client
+
+def http_get(url: str, **kwargs) -> Optional[SimpleResponse]:
+    return _client().get(url, **kwargs)
+
+def http_get_json(url: str, **kwargs) -> Optional[Dict[str, Any]]:
+    return _client().get_json(url, **kwargs)
+
+def http_get_xml(url: str, **kwargs) -> Optional[ET.Element]:
+    return _client().get_xml(url, **kwargs)
+
+def http_download(url: str, output_path: Path, **kwargs) -> bool:
+    return _client().download_file(url, output_path, **kwargs)
+
+# --------------------------------------------------------------------------------------
+# Self-test (delete or keep for sanity checks)
+# --------------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    s = RecursionSafeSession()
+    r = s.safe_get("https://httpbin.org/get", params={"q": "gis"})
+    if r:
+        log.info("Status: %s, bytes: %s", r.status_code, len(r.content))
+        data = r.json()
+        log.info("Keys: %s", list(data.keys()) if data else "none")
+
+    out = Path("tmp/example.json")
+    ok = download_with_retries("https://httpbin.org/json", out, max_retries=2)
+    log.info("Download ok: %s", ok)

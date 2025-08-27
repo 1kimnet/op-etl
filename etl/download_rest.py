@@ -20,6 +20,11 @@ from .sr_utils import (
 log = logging.getLogger(__name__)
 
 
+class TransferLimitExceededError(Exception):
+    """Raised when REST service hits transfer limits and needs alternative pagination."""
+    pass
+
+
 def sanitize_layer_name(name: str) -> str:
     """Sanitize layer name to make it safe for use as a filename."""
     if not name:
@@ -243,7 +248,7 @@ def download_layer(
     global_bbox: Optional[List[float]],
     global_sr: Optional[int],
 ) -> int:
-    """Download all features from a REST layer with enhanced error handling."""
+    """Download all features from a REST layer with enhanced error handling and pagination."""
     session = RecursionSafeSession()
 
     try:
@@ -275,14 +280,12 @@ def download_layer(
         source_info = {"type": "rest", "raw": raw_config}
         sr_config = get_sr_config_for_source(source_info)
         
-        # Build query parameters with enforced SR consistency
-        params = {
+        # Build base query parameters with enforced SR consistency
+        base_params = {
             "f": "geojson",
             "where": raw_config.get("where", "1=1"),
             "outFields": raw_config.get("out_fields", "*"),
             "returnGeometry": "true",
-            "resultOffset": 0,
-            "resultRecordCount": 1000,
             # Enforce SR 3006 for REST APIs (best practice)
             "inSR": sr_config.get("in_sr", SWEREF99_TM),
             "outSR": sr_config.get("out_sr", SWEREF99_TM),
@@ -292,72 +295,33 @@ def download_layer(
         bbox = raw_config.get("bbox") or global_bbox
         bbox_sr = sr_config.get("bbox_sr", SWEREF99_TM)
         if bbox and len(bbox) >= 4:
-            params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
-            params["geometryType"] = "esriGeometryEnvelope"
-            params["geometrySR"] = bbox_sr
+            base_params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+            base_params["geometryType"] = "esriGeometryEnvelope"
+            base_params["geometrySR"] = bbox_sr
             
-        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {params['inSR']}, outSR: {params['outSR']}")
+        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {base_params['outSR']}")
 
-        # Download features with pagination
+        # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
+        supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
+        oid_field = layer_info.get("objectIdField", "OBJECTID")
+
+        # Try offset-based pagination first, fall back to OID-based if transfer limits hit
         all_features = []
-        offset = 0
-        page_size = 1000
+        request_count = 0
 
-        while True:
-            params["resultOffset"] = offset
-
-            query_url = f"{layer_url}/query"
-            response = session.safe_get(query_url, params=params, timeout=60)
-
-            if not response:
-                log.warning(f"[REST] Failed to query layer at offset {offset}")
-                break
-
-            if not validate_response_content(response):
-                log.warning(f"[REST] Invalid query response at offset {offset}")
-                break
-
-            data = safe_json_parse(response.content)
-            if not data:
-                log.warning(f"[REST] Failed to parse query response at offset {offset}")
-                break
-
-            # Validate SR consistency on first page
-            if offset == 0:
-                expected_sr = sr_config.get("out_sr", SWEREF99_TM)
-                sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
-                if not sr_valid:
-                    log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
-                
-                # Validate bbox vs envelope if applicable
-                if bbox and 'extent' in data:
-                    bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
-                    if not bbox_valid:
-                        log.warning("Bbox validation failed")
-
-            features = data.get("features", [])
-
-            if not features:
-                # Check if we hit transfer limit
-                exceeded_limit = data.get("exceededTransferLimit", False)
-                if exceeded_limit and offset == 0:
-                    log.warning("Transfer limit exceeded on first page")
-                break
-
-            all_features.extend(features)
-            log.debug(f"[REST] Downloaded {len(features)} features (offset {offset})")
-
-            # Check if we got all features or hit transfer limit
-            exceeded_limit = data.get("exceededTransferLimit", False)
-            if len(features) < page_size and not exceeded_limit:
-                break
-
-            offset += page_size
-
-            # Avoid infinite loops
-            if offset > 100000:
-                log.warning(f"[REST] Stopping at {offset} features (safety limit)")
-                break
+        try:
+            all_features, request_count = _download_with_offset_pagination(
+                session, layer_url, base_params, layer_name, sr_config, bbox
+            )
+        except TransferLimitExceededError:
+            if supports_oids:
+                log.info(f"[REST] Transfer limit exceeded, switching to OID-based pagination for {layer_name}")
+                all_features, request_count = _download_with_oid_pagination(
+                    session, layer_url, base_params, oid_field, layer_name
+                )
+            else:
+                log.warning(f"[REST] Transfer limit exceeded but OID pagination not supported for {layer_name}")
+                # Continue with what we got from offset pagination
 
         # Save all features as GeoJSON
         if all_features:
@@ -367,7 +331,9 @@ def download_layer(
             with open(out_file, "w", encoding="utf-8") as f:
                 json.dump(geojson, f, ensure_ascii=False, separators=(",", ":"))
 
-            log.info(f"[REST] Saved {len(all_features)} features to {out_file.name}")
+            log.info(f"[REST] Completed {layer_name}: paged {len(all_features)} features in {request_count} requests")
+        else:
+            log.info(f"[REST] Completed {layer_name}: no features found in {request_count} requests")
 
         return len(all_features)
 
@@ -377,3 +343,174 @@ def download_layer(
     except Exception as e:
         log.error(f"[REST] Failed to download layer: {e}")
         return 0
+
+
+def _download_with_offset_pagination(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    layer_name: str,
+    sr_config: Dict,
+    bbox: Optional[List[float]]
+) -> Tuple[List[Dict], int]:
+    """Download features using offset-based pagination with transfer limit detection."""
+    all_features = []
+    offset = 0
+    page_size = 1000
+    request_count = 0
+    page_num = 1
+
+    # Add pagination parameters to base params
+    params = base_params.copy()
+    params.update({
+        "resultOffset": 0,
+        "resultRecordCount": page_size,
+    })
+
+    while True:
+        params["resultOffset"] = offset
+        query_url = f"{layer_url}/query"
+
+        response = session.safe_get(query_url, params=params, timeout=60)
+        request_count += 1
+
+        if not response:
+            log.warning(f"[REST] Failed to query {layer_name} at offset {offset}")
+            break
+
+        if not validate_response_content(response):
+            log.warning(f"[REST] Invalid query response for {layer_name} at offset {offset}")
+            break
+
+        data = safe_json_parse(response.content)
+        if not data:
+            log.warning(f"[REST] Failed to parse query response for {layer_name} at offset {offset}")
+            break
+
+        # Validate SR consistency on first page
+        if offset == 0:
+            expected_sr = sr_config.get("out_sr", SWEREF99_TM)
+            sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
+            if not sr_valid:
+                log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
+            
+            # Validate bbox vs envelope if applicable
+            if bbox and 'extent' in data:
+                bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
+                if not bbox_valid:
+                    log.warning("Bbox validation failed")
+
+        # Check for transfer limit exceeded
+        exceeded_transfer_limit = data.get("exceededTransferLimit", False)
+        features = data.get("features", [])
+
+        if features:
+            all_features.extend(features)
+            log.debug(f"[REST] {layer_name} page {page_num}: {len(features)} features (offset {offset})")
+            page_num += 1
+
+        # Stop conditions per acceptance criteria:
+        # 1. No features returned
+        # 2. Page size is short (less than requested) AND exceededTransferLimit is False
+        if not features:
+            log.debug(f"[REST] {layer_name}: no more features, stopping pagination")
+            break
+        elif len(features) < page_size and not exceeded_transfer_limit:
+            log.debug(f"[REST] {layer_name}: short page ({len(features)} < {page_size}) and no transfer limit, stopping")
+            break
+        elif exceeded_transfer_limit and len(features) == page_size:
+            # Continue paging while transfer limit is exceeded and page is full
+            log.debug(f"[REST] {layer_name}: transfer limit exceeded, continuing pagination")
+        elif exceeded_transfer_limit and len(features) < page_size:
+            # This shouldn't normally happen, but raise error to trigger OID pagination
+            log.warning(f"[REST] {layer_name}: transfer limit exceeded with short page, switching to OID pagination")
+            raise TransferLimitExceededError("Transfer limit exceeded with incomplete results")
+
+        offset += page_size
+
+        # Safety guard against infinite loops
+        if offset > 1000000:  # Increased from 100k to 1M for large datasets
+            log.warning(f"[REST] {layer_name}: stopping at {offset} features (safety limit)")
+            break
+
+    return all_features, request_count
+
+
+def _download_with_oid_pagination(
+    session: RecursionSafeSession,
+    layer_url: str,
+    base_params: Dict,
+    oid_field: str,
+    layer_name: str
+) -> Tuple[List[Dict], int]:
+    """Download features using OID-based pagination for large datasets."""
+    log.info(f"[REST] {layer_name}: using OID-based pagination with field '{oid_field}'")
+
+    # First, get all object IDs
+    oid_params = base_params.copy()
+    oid_params.update({
+        "returnIdsOnly": "true",
+        "f": "json"  # Use JSON for IDs, not GeoJSON
+    })
+
+    query_url = f"{layer_url}/query"
+    response = session.safe_get(query_url, params=oid_params, timeout=60)
+    request_count = 1
+
+    if not response or not validate_response_content(response):
+        log.warning(f"[REST] {layer_name}: failed to get object IDs for OID pagination")
+        return [], request_count
+
+    oid_data = safe_json_parse(response.content)
+    if not oid_data:
+        log.warning(f"[REST] {layer_name}: failed to parse object IDs response")
+        return [], request_count
+
+    # Extract object IDs
+    object_ids = oid_data.get("objectIds", [])
+    if not object_ids:
+        log.info(f"[REST] {layer_name}: no object IDs found")
+        return [], request_count
+
+    log.info(f"[REST] {layer_name}: found {len(object_ids)} object IDs, fetching in batches")
+
+    # Download features in batches using object IDs
+    all_features = []
+    batch_num = 1
+    batch_size = 1000  # Number of object IDs to fetch per batch
+
+    # Prepare parameters for feature queries
+    feature_params = base_params.copy()
+    feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
+
+    for i in range(0, len(object_ids), batch_size):
+        batch_ids = object_ids[i:i + batch_size]
+        oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
+
+        # Combine with existing where clause if present
+        original_where = feature_params.get("where", "1=1")
+        if original_where and original_where != "1=1":
+            feature_params["where"] = f"({original_where}) AND {oid_where}"
+        else:
+            feature_params["where"] = oid_where
+
+        response = session.safe_get(query_url, params=feature_params, timeout=60)
+        request_count += 1
+
+        if not response or not validate_response_content(response):
+            log.warning(f"[REST] {layer_name}: failed to fetch OID batch {batch_num}")
+            continue
+
+        data = safe_json_parse(response.content)
+        if not data:
+            log.warning(f"[REST] {layer_name}: failed to parse OID batch {batch_num}")
+            continue
+
+        features = data.get("features", [])
+        if features:
+            all_features.extend(features)
+            log.debug(f"[REST] {layer_name} OID batch {batch_num}: {len(features)} features")
+
+        batch_num += 1
+
+    return all_features, request_count
