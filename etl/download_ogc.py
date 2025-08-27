@@ -13,8 +13,11 @@ from urllib.parse import urljoin
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
-    SWEREF99_TM, WGS84_DD, CRS84, get_sr_config_for_source,
-    validate_sr_consistency, log_sr_validation_summary
+    SWEREF99_TM,
+    WGS84_DD,
+    get_sr_config_for_source,
+    log_sr_validation_summary,
+    validate_sr_consistency,
 )
 
 log = logging.getLogger(__name__)
@@ -157,10 +160,10 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
             log.warning(f"[OGC] Failed collection {cid}: {e}")
 
     log.info(f"[OGC] Total features from {name}: {total_features}")
-    
+
     if total_features == 0:
         log.info(f"[OGC] No features found in bbox for {name} - this is acceptable (not an error)")
-    
+
     # Success if we successfully processed collections (even if 0 features)
     # Only fail if no collections were discovered or other errors occurred
     return True, total_features
@@ -225,7 +228,10 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     # Get SR configuration for source (OGC-specific handling)
     source_info = {"type": "ogc", "raw": raw}
     sr_config = get_sr_config_for_source(source_info)
-    
+
+    # Check if server supports EPSG:3006 - define early to ensure it's always bound
+    supports_3006 = raw.get("supports_epsg_3006", False)
+
     # Only add limit parameter if explicitly configured and not the default
     if raw.get("page_size") and raw.get("page_size") != 1000:
         params["limit"] = page_size
@@ -236,11 +242,9 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     }
 
     bbox = raw.get("bbox") or global_bbox
-    
+
     if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox[:4])
-        # Check if server supports EPSG:3006, otherwise use CRS84
-        supports_3006 = raw.get("supports_epsg_3006", False)
         if supports_3006:
             params["bbox-crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
             params["crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
@@ -299,7 +303,7 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
             next_link = _find_next_link(data.get("links", []))
             next_url = next_link
             next_params = None
-            
+
             # Ensure CRS params are maintained across pagination
             if next_url and supports_3006:
                 if "?" in next_url:
@@ -326,11 +330,11 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
                 json.dump({"type": "FeatureCollection", "features": all_features}, f, ensure_ascii=False, separators=(",", ":"))
 
             log.info(f"[OGC] Saved {total} features to {out_file.name}")
-            
+
             # Log validation summary
             if validation_results:
                 log_sr_validation_summary(collection_id, validation_results)
-        
+
         return total
 
     except RecursionError as e:
@@ -349,4 +353,3 @@ def _find_next_link(links: List[Dict]) -> Optional[str]:
     except Exception:
         pass
     return None
- 
