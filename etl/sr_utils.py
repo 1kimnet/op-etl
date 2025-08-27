@@ -150,53 +150,75 @@ def detect_sr_from_geojson(geojson_data: Dict[str, Any]) -> Optional[int]:
                 
     return None
 
-def validate_sr_consistency(data: Dict[str, Any], expected_sr: Optional[int]) -> Tuple[bool, Optional[int]]:
-    """
-    Validate spatial reference consistency in response data.
-    
-    Args:
-        data: Response data (GeoJSON or ArcGIS REST response)
-        expected_sr: Expected EPSG code
-        
-    Returns:
-        Tuple of (is_valid, detected_sr)
-    """
-    detected_sr = None
-    
-    # For GeoJSON
-    if data.get('type') == 'FeatureCollection':
-        detected_sr = detect_sr_from_geojson(data)
-        features = data.get('features', [])
-        
-        # Validate coordinate magnitudes for first feature
-        if features and expected_sr:
-            first_feature = features[0]
-            geometry = first_feature.get('geometry', {})
-            coordinates = geometry.get('coordinates')
-            if coordinates:
-                # Get first coordinate pair
+ def validate_sr_consistency(data: Dict[str, Any], expected_sr: Optional[int]) -> Tuple[bool, Optional[int]]:
+     """
+     Validate spatial reference consistency in response data.
+     
+     Args:
+         data: Response data (GeoJSON or ArcGIS REST response)
+         expected_sr: Expected EPSG code
+         
+     Returns:
+         Tuple of (is_valid, detected_sr)
+     """
+     detected_sr = None
+     
+     # For GeoJSON
+     if data.get('type') == 'FeatureCollection':
+         detected_sr = detect_sr_from_geojson(data)
+         features = data.get('features', [])
+         
+         # Validate coordinate magnitudes for first feature
+         if features and expected_sr:
+             first_feature = features[0]
+             geometry = first_feature.get('geometry', {})
+             coordinates = geometry.get('coordinates')
+             if coordinates:
+-                # Get first coordinate pair
+-                flat_coords = _flatten_coordinates(coordinates)
+-                if flat_coords and len(flat_coords) >= 2:
+-                    if not validate_coordinates_magnitude(flat_coords[:2], expected_sr):
                 flat_coords = _flatten_coordinates(coordinates)
                 if flat_coords and len(flat_coords) >= 2:
-                    if not validate_coordinates_magnitude(flat_coords[:2], expected_sr):
+                    # If SR not declared, infer from magnitudes
+                    if detected_sr is None:
+                        inferred = _infer_sr_from_coords(flat_coords[:2])
+                        if inferred is not None:
+                            detected_sr = inferred
+                    if expected_sr and not validate_coordinates_magnitude(flat_coords[:2], expected_sr):
                         return False, detected_sr
-                        
-    # For ArcGIS REST response
-    elif 'spatialReference' in data:
-        sr_info = data['spatialReference']
-        if isinstance(sr_info, dict) and 'wkid' in sr_info:
-            detected_sr = sr_info['wkid']
-            
-    # Check consistency
-    if expected_sr and detected_sr and expected_sr != detected_sr:
-        log.warning(f"SR mismatch: expected {expected_sr}, detected {detected_sr}")
-        return False, detected_sr
-        
-    # Check for unknown SR
-    if detected_sr is None:
-        log.warning("Unknown spatial reference detected")
-        return False, None
-        
-    return True, detected_sr
+                         
+     # For ArcGIS REST response
+     elif 'spatialReference' in data:
+         sr_info = data['spatialReference']
+         if isinstance(sr_info, dict) and 'wkid' in sr_info:
+             detected_sr = sr_info['wkid']
+             
+     # Check consistency
+     if expected_sr and detected_sr and expected_sr != detected_sr:
+         log.warning(f"SR mismatch: expected {expected_sr}, detected {detected_sr}")
+         return False, detected_sr
+         
+     # Check for unknown SR
+     if detected_sr is None:
+         log.warning("Unknown spatial reference detected")
+         return False, None
+         
+     return True, detected_sr
+ 
+def _infer_sr_from_coords(xy: List[float]) -> Optional[int]:
+    """
+    Best-effort SR inference from a single [x, y] pair.
+    Returns EPSG code when confidently inferred, otherwise None.
+    """
+    x, y = xy[0], xy[1]
+    # Degrees plausibility (global)
+    if -180 <= x <= 180 and -90 <= y <= 90:
+        return WGS84_DD
+    # SWEREF99 TM rough bounds (meters, Sweden)
+    if 200000 <= x <= 900000 and 6100000 <= y <= 7700000:
+        return SWEREF99_TM
+    return None
 
 def _flatten_coordinates(coords) -> List[float]:
     """Helper to flatten nested coordinate arrays to get first coordinate pair."""
