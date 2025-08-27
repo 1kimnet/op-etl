@@ -351,13 +351,7 @@ def safe_json_parse(content: Union[str, bytes], max_size_mb: int = 50) -> Option
             log.warning(f"[JSON] Content too large: {len(content)} bytes")
             return None
 
-        # Check for obviously problematic content
-        if isinstance(content, str):
-            brace_count = sum(1 for c in content if c == '{')
-            bracket_count = sum(1 for c in content if c == '[')
-            if brace_count > 50000 or bracket_count > 50000:
-                log.warning("[JSON] Content appears to have excessive nesting")
-                return None
+
 
         # Parse with standard library
         try:
