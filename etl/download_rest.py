@@ -287,8 +287,8 @@ def download_layer(
             in_sr = raw_config.get("bbox_sr") or global_sr or 4326
             base_params["inSR"] = in_sr
 
-        # Check if the service supports returnIdsOnly for OID-based pagination
-        supports_oids = layer_info.get("supportsStatistics", False) or "objectIdField" in layer_info
+        # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
+        supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
         oid_field = layer_info.get("objectIdField", "OBJECTID")
 
         # Try offset-based pagination first, fall back to OID-based if transfer limits hit
