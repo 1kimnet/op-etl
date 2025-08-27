@@ -21,6 +21,10 @@ from .sr_utils import (
 
 log = logging.getLogger(__name__)
 
+# Constants for parallel processing and retry handling
+MAX_CONCURRENT_REQUESTS = 8  # Hard cap on concurrent requests per layer
+MAX_RETRY_AFTER_SECONDS = 30  # Maximum wait time for Retry-After headers
+
 
 class TransferLimitExceededError(Exception):
     """Raised when REST service hits transfer limits and needs alternative pagination."""
@@ -79,6 +83,156 @@ def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int
         return coords, sr
     except Exception:
         return None, None
+
+
+def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, float]] = None) -> Dict[str, str]:
+    """
+    Build REST API parameters with explicit format handling.
+    
+    Args:
+        cfg: Raw configuration dictionary
+        bbox_3006: Optional bounding box in SWEREF99 TM (3006) coordinates as (xmin, ymin, xmax, ymax)
+        
+    Returns:
+        Dictionary of REST API parameters
+    """
+    fmt = cfg.get("response_format", "esrijson").lower()
+    params = {
+        "where": cfg.get("where", "1=1"),
+        "outFields": "*",
+        "returnGeometry": "true",
+        "orderByFields": "OBJECTID ASC",
+    }
+
+    # Geometry filter: always send the envelope in SWEREF99 TM; REST expects JSON
+    if bbox_3006:
+        xmin, ymin, xmax, ymax = bbox_3006
+        geom = {
+            "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax, 
+            "spatialReference": {"wkid": 3006}
+        }
+        params.update({
+            "geometry": json.dumps(geom),
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": 3006,
+            "spatialRel": "esriSpatialRelIntersects",
+        })
+
+    if fmt == "esrijson":
+        params["f"] = "json"
+        params["outSR"] = cfg.get("stage_sr", 3006)
+    else:
+        # GeoJSON path: outSR is ignored; assume WGS84 degrees
+        params["f"] = "geojson"
+        params.pop("outSR", None)
+
+    return params
+
+
+def create_staging_fc(workspace: str, name: str, geometry_type: str, response_format: str, stage_sr: int) -> str:
+    """
+    Create a staging feature class with the appropriate spatial reference.
+    
+    Args:
+        workspace: Path to workspace (typically arcpy.env.scratchGDB)
+        name: Feature class name
+        geometry_type: Geometry type (e.g., "POLYLINE", "POLYGON", "POINT")
+        response_format: Format used ("esrijson" or "geojson")
+        stage_sr: Staging spatial reference EPSG code
+        
+    Returns:
+        Full path to created feature class
+    """
+    try:
+        import arcpy
+        sr = arcpy.SpatialReference(stage_sr)
+        arcpy.management.CreateFeatureclass(workspace, name, geometry_type, spatial_reference=sr)
+        fc_path = f"{workspace}\\{name}"
+        log.info(f"[REST] Created staging FC {name} with SR {stage_sr} ({response_format} format)")
+        return fc_path
+    except Exception as e:
+        log.error(f"[REST] Failed to create staging FC {name}: {e}")
+        raise
+
+
+def ensure_target_sr(in_fc: str, target_sr: int, transform: Optional[str] = None) -> str:
+    """
+    Ensure feature class is in target spatial reference, projecting if needed.
+    
+    Args:
+        in_fc: Input feature class path
+        target_sr: Target spatial reference EPSG code
+        transform: Optional transformation method
+        
+    Returns:
+        Path to feature class in target SR (may be same as input if no projection needed)
+    """
+    try:
+        import arcpy
+        sr_in = arcpy.Describe(in_fc).spatialReference
+        if sr_in and sr_in.factoryCode == target_sr:
+            log.debug(f"[REST] FC already in target SR {target_sr}")
+            return in_fc
+            
+        out_fc = in_fc + f"_{target_sr}"
+        log.info(f"[REST] Projecting from SR {sr_in.factoryCode} to {target_sr}")
+        
+        project_params = {
+            "in_dataset": in_fc,
+            "out_dataset": out_fc,
+            "out_coor_system": arcpy.SpatialReference(target_sr)
+        }
+        
+        if transform:
+            project_params["transform_method"] = transform
+            
+        arcpy.management.Project(**project_params)
+        return out_fc
+    except Exception as e:
+        log.error(f"[REST] Failed to project FC to target SR {target_sr}: {e}")
+        raise
+
+
+def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
+    """
+    Validate staged feature class spatial reference and coordinate magnitudes.
+    
+    Args:
+        fc: Feature class path
+        response_format: Format used ("esrijson" or "geojson") 
+        target_sr: Expected target spatial reference
+        
+    Raises:
+        RuntimeError: If validation fails
+    """
+    try:
+        import arcpy
+        sr = arcpy.Describe(fc).spatialReference
+        if not sr or sr.factoryCode in (0, None):
+            raise RuntimeError(f"{fc}: Unknown spatial reference")
+
+        if response_format.lower() == "geojson":
+            expected = 4326
+        else:
+            expected = target_sr  # esrijson path should already be in target SR
+
+        if sr.factoryCode != expected:
+            raise RuntimeError(f"{fc}: SR={sr.factoryCode}, expected {expected}")
+
+        # Magnitude sanity check (sample 1 row)
+        with arcpy.da.SearchCursor(fc, ["SHAPE@X", "SHAPE@Y"]) as cur:
+            for x, y in cur:
+                if expected == 3006 and (-180 <= x <= 180 and -90 <= y <= 90):
+                    raise RuntimeError(f"{fc}: Degrees detected in meter-based SR {expected}")
+                elif expected == 4326 and (abs(x) > 180 or abs(y) > 90):
+                    raise RuntimeError(f"{fc}: Meter coordinates detected in degree-based SR {expected}")
+                break  # Only check first row
+                
+        log.info(f"[REST] Validation passed for {fc} (SR={sr.factoryCode}, format={response_format})")
+        
+    except Exception as e:
+        log.error(f"[REST] Validation failed for {fc}: {e}")
+        raise
 
 
 def run(cfg: dict) -> None:
@@ -278,30 +432,22 @@ def download_layer(
             log.warning(f"[REST] Layer doesn't support queries: {layer_url}")
             return 0
 
-        # Get SR configuration for source (enforce best practices)
-        source_info = {"type": "rest", "raw": raw_config}
-        sr_config = get_sr_config_for_source(source_info)
+        # Get response format and SR configuration
+        fmt = raw_config.get("response_format", "esrijson").lower()
+        stage_sr = int(raw_config.get("stage_sr", 3006 if fmt == "esrijson" else 4326))
+        target_sr = int(raw_config.get("target_sr", 3006))
+        transform = raw_config.get("geo_transform", "WGS_1984_To_ETRS_1989") if stage_sr != target_sr else None
         
-        # Build base query parameters with enforced SR consistency
-        base_params = {
-            "f": "geojson",
-            "where": raw_config.get("where", "1=1"),
-            "outFields": raw_config.get("out_fields", "*"),
-            "returnGeometry": "true",
-            # Enforce SR 3006 for REST APIs (best practice)
-            "inSR": sr_config.get("in_sr", SWEREF99_TM),
-            "outSR": sr_config.get("out_sr", SWEREF99_TM),
-        }
-
-        # Add bbox if configured (prefer raw, else global) - express in SR 3006
+        # Convert bbox to SWEREF99 TM tuple if needed
         bbox = raw_config.get("bbox") or global_bbox
-        bbox_sr = sr_config.get("bbox_sr", SWEREF99_TM)
+        bbox_3006 = None
         if bbox and len(bbox) >= 4:
-            base_params["geometry"] = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
-            base_params["geometryType"] = "esriGeometryEnvelope"
-            base_params["geometrySR"] = bbox_sr
+            bbox_3006 = tuple(bbox[:4])
             
-        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {base_params['outSR']}")
+        # Build REST parameters using new helper
+        base_params = build_rest_params(raw_config, bbox_3006)
+        
+        log.info(f"[REST] Using format={fmt}, stage_sr={stage_sr}, target_sr={target_sr}, transform={transform}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
         supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
@@ -335,7 +481,7 @@ def download_layer(
             # Fall back to offset-based pagination
             try:
                 all_features, request_count = _download_with_offset_pagination(
-                    session, layer_url, base_params, layer_name, sr_config, bbox
+                    session, layer_url, base_params, layer_name, fmt, stage_sr
                 )
             except TransferLimitExceededError:
                 log.warning(f"[REST] {layer_name}: offset pagination failed with transfer limits and OID pagination not supported")
@@ -343,7 +489,7 @@ def download_layer(
             # Default behavior: try offset-based pagination first, fall back to sequential OID-based if transfer limits hit
             try:
                 all_features, request_count = _download_with_offset_pagination(
-                    session, layer_url, base_params, layer_name, sr_config, bbox
+                    session, layer_url, base_params, layer_name, fmt, stage_sr
                 )
             except TransferLimitExceededError:
                 if supports_oids:
@@ -382,8 +528,8 @@ def _download_with_offset_pagination(
     layer_url: str,
     base_params: Dict,
     layer_name: str,
-    sr_config: Dict,
-    bbox: Optional[List[float]]
+    response_format: str,
+    stage_sr: int
 ) -> Tuple[List[Dict], int]:
     """Download features using offset-based pagination with transfer limit detection."""
     all_features = []
@@ -418,19 +564,6 @@ def _download_with_offset_pagination(
         if not data:
             log.warning(f"[REST] Failed to parse query response for {layer_name} at offset {offset}")
             break
-
-        # Validate SR consistency on first page
-        if offset == 0:
-            expected_sr = sr_config.get("out_sr", SWEREF99_TM)
-            sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
-            if not sr_valid:
-                log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
-            
-            # Validate bbox vs envelope if applicable
-            if bbox and 'extent' in data:
-                bbox_valid = validate_bbox_vs_envelope(bbox, data['extent'])
-                if not bbox_valid:
-                    log.warning("Bbox validation failed")
 
         # Check for transfer limit exceeded
         exceeded_transfer_limit = data.get("exceededTransferLimit", False)
@@ -511,9 +644,8 @@ def _download_with_oid_pagination(
     batch_num = 1
     batch_size = 1000  # Number of object IDs to fetch per batch
 
-    # Prepare parameters for feature queries
+    # Prepare parameters for feature queries - use the same format as base_params
     feature_params = base_params.copy()
-    feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
 
     for i in range(0, len(object_ids), batch_size):
         batch_ids = object_ids[i:i + batch_size]
@@ -608,9 +740,8 @@ def _rest_fetch_oid_batch(
     # Build OID WHERE clause
     oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
     
-    # Prepare parameters for feature queries
+    # Prepare parameters for feature queries - use the same format as base_params
     feature_params = base_params.copy()
-    feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
     
     # Combine with existing where clause if present
     original_where = feature_params.get("where", "1=1")
