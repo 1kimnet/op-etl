@@ -8,6 +8,7 @@ A clean restart for the ETL repo focusing only on the download step. Reads `sour
 
 * Support source types: `http` (file), `rest` (ArcGIS REST), `ogc` (OGC API Features). `atom` is stubbed for later.
 * Optional global `defaults.bbox` with per-source override via `raw.bbox`.
+* **Enhanced REST pagination**: Transfer-limit detection with automatic OID-based fallback for large datasets.
 * Output:
 
   * HTTP: downloaded file path and extracted folder if ZIP
@@ -421,6 +422,26 @@ def fetch_to_folder(base_collections_url: str, out_dir: Path, *,
             time.sleep(0.2)
     return out_dir
 ```
+
+#### Enhanced REST Pagination
+
+The REST implementation now includes advanced pagination strategies to handle large datasets and transfer limits:
+
+**Transfer-Limit Detection**: 
+- Monitors `exceededTransferLimit` flag in REST API responses
+- Continues pagination until `exceededTransferLimit` is false and the last page is short
+- Prevents incomplete data downloads when services hit internal limits
+
+**OID-Based Fallback Pagination**:
+- Alternative pagination using `returnIdsOnly=true` to get ObjectIDs first
+- Fetches features in batches using `OBJECTID IN (...)` queries
+- Automatically used when offset-based pagination hits transfer limits
+- Supports large datasets that exceed standard pagination capabilities
+
+**Enhanced Logging**:
+- Clear page progress: `"Page N: X features (offset Y)"`  
+- Final summary: `"Completed layer_name: paged N features in M requests"`
+- Transfer limit warnings and pagination method switches
 
 ---
 
