@@ -311,7 +311,10 @@ def download_layer(
             base_params["geometryType"] = "esriGeometryEnvelope"
             base_params["geometrySR"] = bbox_sr
             
-        out_sr_display = base_params.get('outSR', 'not set')
+        if response_format == 'geojson':
+            out_sr_display = "omitted (GeoJSON)"
+        else:
+            out_sr_display = base_params.get('outSR', 'not set')
         log.info(f"[REST] Using format: {response_format}, SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {out_sr_display}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
