@@ -9,14 +9,13 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeAlias
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
-    SWEREF99_TM, WGS84_DD, get_sr_config_for_source, 
-    validate_sr_consistency, validate_bbox_vs_envelope,
-    log_sr_validation_summary
+    SWEREF99_TM,
+    WGS84_DD,
 )
 
 log = logging.getLogger(__name__)
@@ -24,6 +23,9 @@ log = logging.getLogger(__name__)
 # Constants for parallel processing and retry handling
 MAX_CONCURRENT_REQUESTS = 8  # Hard cap on concurrent requests per layer
 MAX_RETRY_AFTER_SECONDS = 30  # Maximum wait time for Retry-After headers
+
+# Type aliases
+BBox: TypeAlias = Tuple[float, float, float, float]
 
 
 class TransferLimitExceededError(Exception):
@@ -85,14 +87,14 @@ def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int
         return None, None
 
 
-def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, float]] = None) -> Dict[str, str]:
+def build_rest_params(cfg: Dict[str, Any], bbox_3006: Optional[BBox] = None) -> Dict[str, Any]:
     """
     Build REST API parameters with explicit format handling.
-    
+
     Args:
         cfg: Raw configuration dictionary
         bbox_3006: Optional bounding box in SWEREF99 TM (3006) coordinates as (xmin, ymin, xmax, ymax)
-        
+
     Returns:
         Dictionary of REST API parameters
     """
@@ -108,7 +110,7 @@ def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, 
     if bbox_3006:
         xmin, ymin, xmax, ymax = bbox_3006
         geom = {
-            "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax, 
+            "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
             "spatialReference": {"wkid": SWEREF99_TM}
         }
         params.update({
@@ -132,14 +134,14 @@ def build_rest_params(cfg: Dict, bbox_3006: Optional[Tuple[float, float, float, 
 def create_staging_fc(workspace: str, name: str, geometry_type: str, response_format: str, stage_sr: int) -> str:
     """
     Create a staging feature class with the appropriate spatial reference.
-    
+
     Args:
         workspace: Path to workspace (typically arcpy.env.scratchGDB)
         name: Feature class name
         geometry_type: Geometry type (e.g., "POLYLINE", "POLYGON", "POINT")
         response_format: Format used ("esrijson" or "geojson")
         stage_sr: Staging spatial reference EPSG code
-        
+
     Returns:
         Full path to created feature class
     """
@@ -158,12 +160,12 @@ def create_staging_fc(workspace: str, name: str, geometry_type: str, response_fo
 def ensure_target_sr(in_fc: str, target_sr: int, transform: Optional[str] = None) -> str:
     """
     Ensure feature class is in target spatial reference, projecting if needed.
-    
+
     Args:
         in_fc: Input feature class path
         target_sr: Target spatial reference EPSG code
         transform: Optional transformation method
-        
+
     Returns:
         Path to feature class in target SR (may be same as input if no projection needed)
     """
@@ -173,19 +175,19 @@ def ensure_target_sr(in_fc: str, target_sr: int, transform: Optional[str] = None
         if sr_in and sr_in.factoryCode == target_sr:
             log.debug(f"[REST] FC already in target SR {target_sr}")
             return in_fc
-            
+
         out_fc = in_fc + f"_{target_sr}"
         log.info(f"[REST] Projecting from SR {sr_in.factoryCode} to {target_sr}")
-        
+
         project_params = {
             "in_dataset": in_fc,
             "out_dataset": out_fc,
             "out_coor_system": arcpy.SpatialReference(target_sr)
         }
-        
+
         if transform:
             project_params["transform_method"] = transform
-            
+
         arcpy.management.Project(**project_params)
         return out_fc
     except Exception as e:
@@ -196,12 +198,12 @@ def ensure_target_sr(in_fc: str, target_sr: int, transform: Optional[str] = None
 def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
     """
     Validate staged feature class spatial reference and coordinate magnitudes.
-    
+
     Args:
         fc: Feature class path
-        response_format: Format used ("esrijson" or "geojson") 
+        response_format: Format used ("esrijson" or "geojson")
         target_sr: Expected target spatial reference
-        
+
     Raises:
         RuntimeError: If validation fails
     """
@@ -227,9 +229,9 @@ def validate_staged_fc(fc: str, response_format: str, target_sr: int) -> None:
                 elif expected == WGS84_DD and (abs(x) > 180 or abs(y) > 90):
                     raise RuntimeError(f"{fc}: Meter coordinates detected in degree-based SR {expected}")
                 break  # Only check first row
-                
+
         log.info(f"[REST] Validation passed for {fc} (SR={sr.factoryCode}, format={response_format})")
-        
+
     except Exception as e:
         log.error(f"[REST] Validation failed for {fc}: {e}")
         raise
@@ -437,16 +439,24 @@ def download_layer(
         stage_sr = int(raw_config.get("stage_sr", SWEREF99_TM if fmt == "esrijson" else WGS84_DD))
         target_sr = int(raw_config.get("target_sr", SWEREF99_TM))
         transform = raw_config.get("geo_transform", "WGS_1984_To_ETRS_1989") if stage_sr != target_sr else None
-        
+
         # Convert bbox to SWEREF99 TM tuple if needed
-        bbox = raw_config.get("bbox") or global_bbox
-        bbox_3006 = None
-        if bbox and len(bbox) >= 4:
-            bbox_3006 = tuple(bbox[:4])
-            
+        # bbox = raw_config.get("bbox") or global_bbox
+        # bbox_3006 = None
+        # if bbox and len(bbox) >= 4:
+        #     bbox_3006 = tuple(bbox[:4])
+        # Replace with explicit coercion and validation
+        bbox_raw: Optional[Sequence[float]] = raw_config.get("bbox") or global_bbox
+        bbox_3006: Optional[BBox] = None
+        try:
+            bbox_3006 = coerce_bbox4(bbox_raw)
+        except ValueError as e:
+            log.warning(f"[REST] {layer_name}: invalid bbox {bbox_raw!r}: {e}")
+            bbox_3006 = None
+
         # Build REST parameters using new helper
         base_params = build_rest_params(raw_config, bbox_3006)
-        
+
         log.info(f"[REST] Using format={fmt}, stage_sr={stage_sr}, target_sr={target_sr}, transform={transform}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
@@ -470,12 +480,12 @@ def download_layer(
                 session, layer_url, base_params, layer_name, page_size, max_workers
             )
             request_count = metrics.get("request_count", 0)
-            
+
             # Log metrics as requested in the acceptance criteria
             log.info(f"[REST] {layer_name}: OID sweep metrics - oids_total: {metrics.get('oids_total', 0)}, "
                     f"batches_total: {metrics.get('batches_total', 0)}, batches_ok: {metrics.get('batches_ok', 0)}, "
                     f"features_total: {metrics.get('features_total', 0)}")
-                    
+
         elif use_oid_sweep and not supports_oids:
             log.warning(f"[REST] {layer_name}: use_oid_sweep=true but OID pagination not supported, falling back to offset pagination")
             # Fall back to offset-based pagination
@@ -688,12 +698,12 @@ def _rest_get_all_oids(
 ) -> Tuple[List[int], str, int]:
     """
     Get all object IDs from a REST layer.
-    
+
     Returns:
         Tuple of (object_ids, oid_field_name, request_count)
     """
     log.debug(f"[REST] {layer_name}: discovering object IDs")
-    
+
     # Get all object IDs
     oid_params = base_params.copy()
     oid_params.update({
@@ -717,7 +727,7 @@ def _rest_get_all_oids(
     # Extract object IDs and field name
     object_ids = oid_data.get("objectIds", [])
     oid_field = oid_data.get("objectIdFieldName", "OBJECTID")
-    
+
     log.info(f"[REST] {layer_name}: discovered {len(object_ids)} object IDs (field: {oid_field})")
     return object_ids, oid_field, request_count
 
@@ -733,16 +743,16 @@ def _rest_fetch_oid_batch(
 ) -> Tuple[List[Dict], bool, int]:
     """
     Fetch a single batch of features by object IDs.
-    
+
     Returns:
         Tuple of (features, success, request_count)
     """
     # Build OID WHERE clause
     oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
-    
+
     # Prepare parameters for feature queries - use the same format as base_params
     feature_params = base_params.copy()
-    
+
     # Combine with existing where clause if present
     original_where = feature_params.get("where", "1=1")
     if original_where and original_where != "1=1":
@@ -751,14 +761,14 @@ def _rest_fetch_oid_batch(
         feature_params["where"] = oid_where
 
     query_url = f"{layer_url}/query"
-    
+
     # Handle potential retry after
     retry_count = 0
     max_retries = 3
-    
+
     while retry_count <= max_retries:
         response = session.safe_get(query_url, params=feature_params, timeout=60)
-        
+
         if not response or not validate_response_content(response):
             retry_count += 1
             if retry_count <= max_retries:
@@ -774,10 +784,11 @@ def _rest_fetch_oid_batch(
         if hasattr(response, 'headers') and 'Retry-After' in response.headers:
             retry_after = response.headers.get('Retry-After')
             try:
-                wait_time = int(retry_after)
-                if wait_time > 0 and wait_time <= MAX_RETRY_AFTER_SECONDS:  # Reasonable limit
-                    log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
-                    time.sleep(wait_time)
+                if retry_after is not None:
+                    wait_time = int(retry_after)
+                    if wait_time > 0 and wait_time <= MAX_RETRY_AFTER_SECONDS:  # Reasonable limit
+                        log.info(f"[REST] {layer_name} batch {batch_num}: server requested {wait_time}s delay")
+                        time.sleep(wait_time)
             except (ValueError, TypeError):
                 pass  # Invalid Retry-After value, ignore
 
@@ -796,7 +807,7 @@ def _rest_fetch_oid_batch(
         features = data.get("features", [])
         log.debug(f"[REST] {layer_name} batch {batch_num}: {len(features)} features")
         return features, True, retry_count + 1
-    
+
     return [], False, retry_count
 
 
@@ -810,12 +821,12 @@ def fetch_rest_layer_parallel(
 ) -> Tuple[List[Dict], Dict[str, int]]:
     """
     Download features using parallel OID-based pagination.
-    
+
     Returns:
         Tuple of (all_features, metrics_dict)
     """
     log.info(f"[REST] {layer_name}: using parallel OID-based pagination (page_size={page_size}, max_workers={max_workers})")
-    
+
     # Initialize metrics
     metrics = {
         "oids_total": 0,
@@ -824,31 +835,31 @@ def fetch_rest_layer_parallel(
         "features_total": 0,
         "request_count": 0
     }
-    
+
     # Step 1: Get all object IDs
     object_ids, oid_field, request_count = _rest_get_all_oids(session, layer_url, base_params, layer_name)
     metrics["request_count"] += request_count
     metrics["oids_total"] = len(object_ids)
-    
+
     if not object_ids:
         log.info(f"[REST] {layer_name}: no object IDs found")
         return [], metrics
-    
+
     # Step 2: Create batches
     batches = []
     for i in range(0, len(object_ids), page_size):
         batch_ids = object_ids[i:i + page_size]
         batches.append((batch_ids, i // page_size + 1))
-    
+
     metrics["batches_total"] = len(batches)
     log.info(f"[REST] {layer_name}: created {len(batches)} batches, fetching with {max_workers} workers")
-    
+
     # Step 3: Fetch batches in parallel
     all_features = []
-    
+
     # Use conservative max_workers to avoid overwhelming the server
     actual_max_workers = min(max_workers, MAX_CONCURRENT_REQUESTS)  # Hard cap at MAX_CONCURRENT_REQUESTS concurrent requests
-    
+
     with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
         # Submit all batch fetch tasks
         future_to_batch = {}
@@ -858,14 +869,14 @@ def fetch_rest_layer_parallel(
                 session, layer_url, base_params, oid_field, batch_ids, batch_num, layer_name
             )
             future_to_batch[future] = batch_num
-        
+
         # Collect results as they complete
         for future in as_completed(future_to_batch):
             batch_num = future_to_batch[future]
             try:
                 features, success, batch_request_count = future.result()
                 metrics["request_count"] += batch_request_count
-                
+
                 if success:
                     metrics["batches_ok"] += 1
                     if features:
@@ -874,10 +885,23 @@ def fetch_rest_layer_parallel(
                         log.debug(f"[REST] {layer_name}: completed batch {batch_num} with {len(features)} features")
                 else:
                     log.warning(f"[REST] {layer_name}: failed batch {batch_num}")
-                    
+
             except Exception as e:
                 log.error(f"[REST] {layer_name}: batch {batch_num} raised exception: {e}")
-    
+
     log.info(f"[REST] {layer_name}: parallel fetch completed - {metrics['batches_ok']}/{metrics['batches_total']} batches successful, {metrics['features_total']} total features in {metrics['request_count']} requests")
-    
+
     return all_features, metrics
+
+
+def coerce_bbox4(bbox: Optional[Sequence[float]]) -> Optional[BBox]:
+    """Ensure bbox is exactly 4 numbers (xmin, ymin, xmax, ymax)."""
+    if bbox is None:
+        return None
+    if len(bbox) != 4:
+        raise ValueError(f"bbox must have 4 elements [xmin, ymin, xmax, ymax], got {len(bbox)}")
+    xmin = float(bbox[0])
+    ymin = float(bbox[1])
+    xmax = float(bbox[2])
+    ymax = float(bbox[3])
+    return (xmin, ymin, xmax, ymax)
