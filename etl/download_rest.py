@@ -447,7 +447,6 @@ def _download_with_oid_pagination(
     
     # Download features in batches using object IDs
     all_features = []
-    batch_size = 100  # Conservative batch size for OID queries
     batch_num = 1
     
     # Prepare parameters for feature queries
