@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
-    SWEREF99_TM, get_sr_config_for_source, 
+    SWEREF99_TM, WGS84_DD, get_sr_config_for_source, 
     validate_sr_consistency, validate_bbox_vs_envelope,
     log_sr_validation_summary
 )
@@ -280,16 +280,28 @@ def download_layer(
         source_info = {"type": "rest", "raw": raw_config}
         sr_config = get_sr_config_for_source(source_info)
         
-        # Build base query parameters with enforced SR consistency
+        # Determine format and SR parameters based on response_format configuration
+        response_format = sr_config.get('response_format', 'esrijson')
+        
+        # Build base query parameters with format-specific SR handling
         base_params = {
-            "f": "geojson",
             "where": raw_config.get("where", "1=1"),
             "outFields": raw_config.get("out_fields", "*"),
             "returnGeometry": "true",
-            # Enforce SR 3006 for REST APIs (best practice)
-            "inSR": sr_config.get("in_sr", SWEREF99_TM),
-            "outSR": sr_config.get("out_sr", SWEREF99_TM),
         }
+        
+        # Set format and SR parameters based on response_format
+        if response_format == 'geojson':
+            base_params["f"] = "geojson"
+            # For GeoJSON: don't set outSR as many servers ignore it
+            base_params["inSR"] = sr_config.get("in_sr", SWEREF99_TM)
+            # outSR is intentionally omitted for GeoJSON format
+        else:  # esrijson (default)
+            base_params["f"] = "json"
+            base_params["inSR"] = sr_config.get("in_sr", SWEREF99_TM)
+            out_sr = sr_config.get("out_sr")
+            if out_sr:
+                base_params["outSR"] = out_sr
 
         # Add bbox if configured (prefer raw, else global) - express in SR 3006
         bbox = raw_config.get("bbox") or global_bbox
@@ -299,7 +311,8 @@ def download_layer(
             base_params["geometryType"] = "esriGeometryEnvelope"
             base_params["geometrySR"] = bbox_sr
             
-        log.info(f"[REST] Using SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {base_params['outSR']}")
+        out_sr_display = base_params.get('outSR', 'not set')
+        log.info(f"[REST] Using format: {response_format}, SR config - bbox_sr: {bbox_sr}, inSR: {base_params['inSR']}, outSR: {out_sr_display}")
 
         # Check if the service supports OID-based pagination: must support advanced queries and have an objectIdField
         supports_oids = layer_info.get("supportsAdvancedQueries", False) and bool(layer_info.get("objectIdField"))
@@ -311,7 +324,7 @@ def download_layer(
 
         try:
             all_features, request_count = _download_with_offset_pagination(
-                session, layer_url, base_params, layer_name, sr_config, bbox
+                session, layer_url, base_params, layer_name, sr_config, bbox, response_format
             )
         except TransferLimitExceededError:
             if supports_oids:
@@ -351,7 +364,8 @@ def _download_with_offset_pagination(
     base_params: Dict,
     layer_name: str,
     sr_config: Dict,
-    bbox: Optional[List[float]]
+    bbox: Optional[List[float]],
+    response_format: str
 ) -> Tuple[List[Dict], int]:
     """Download features using offset-based pagination with transfer limit detection."""
     all_features = []
@@ -389,10 +403,15 @@ def _download_with_offset_pagination(
 
         # Validate SR consistency on first page
         if offset == 0:
-            expected_sr = sr_config.get("out_sr", SWEREF99_TM)
+            # Expect different SR based on response format
+            if response_format == 'geojson':
+                expected_sr = WGS84_DD  # GeoJSON typically returns WGS84
+            else:
+                expected_sr = sr_config.get("out_sr", SWEREF99_TM)
+                
             sr_valid, detected_sr = validate_sr_consistency(data, expected_sr)
             if not sr_valid:
-                log.warning(f"[REST] SR validation failed - expected {expected_sr}, detected {detected_sr}")
+                log.warning(f"[REST] SR validation failed for {response_format} format - expected {expected_sr}, detected {detected_sr}")
             
             # Validate bbox vs envelope if applicable
             if bbox and 'extent' in data:
@@ -481,7 +500,7 @@ def _download_with_oid_pagination(
 
     # Prepare parameters for feature queries
     feature_params = base_params.copy()
-    feature_params["f"] = "geojson"  # Back to GeoJSON for actual features
+    # Use the same format as the main pagination (already set in base_params)
 
     for i in range(0, len(object_ids), batch_size):
         batch_ids = object_ids[i:i + batch_size]
