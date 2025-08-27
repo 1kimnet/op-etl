@@ -397,9 +397,18 @@ def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int
             log.warning("[JSON] Content too large: %s bytes", len(text))
             return None
 
-        # cheap guard for pathological nesting
-        if text.count("{") > 50_000 or text.count("[") > 50_000:
-            log.warning("[JSON] Content appears excessively nested")
+        # Parse with standard library
+        try:
+            data = json.loads(content)
+
+            # Validate depth after parsing
+            if _check_json_depth(data) > MAX_JSON_DEPTH:
+                log.warning(f"[JSON] Exceeds maximum nesting depth of {MAX_JSON_DEPTH}")
+                return None
+
+            return data
+        except json.JSONDecodeError as e:
+            log.error(f"[JSON] Parse error: {e}")
             return None
 
         data = json.loads(text)

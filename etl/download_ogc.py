@@ -153,7 +153,13 @@ def process_ogc_source(source: Dict, downloads_dir: Path,
             log.warning(f"[OGC] Failed collection {cid}: {e}")
 
     log.info(f"[OGC] Total features from {name}: {total_features}")
-    return total_features > 0, total_features
+    
+    if total_features == 0:
+        log.info(f"[OGC] No features found in bbox for {name} - this is acceptable (not an error)")
+    
+    # Success if we successfully processed collections (even if 0 features)
+    # Only fail if no collections were discovered or other errors occurred
+    return True, total_features
 
 
 def discover_collections(base_url: str) -> List[Dict]:
