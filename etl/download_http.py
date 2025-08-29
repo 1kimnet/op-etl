@@ -14,6 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+# Suppress urllib3 warnings
 log = logging.getLogger(__name__)
 
 # Character mapping for Swedish characters
