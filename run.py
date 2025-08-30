@@ -13,6 +13,49 @@ from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
 
+def configure_logging(cfg: dict) -> None:
+    """Configure logging based on settings from config.yaml."""
+    # Get logging configuration with defaults
+    log_config = cfg.get("logging", {})
+    level = log_config.get("level", "INFO").upper()
+    console_level = log_config.get("console_level", level).upper()
+    log_format = log_config.get("format", "%(asctime)s - %(levelname)s - %(message)s")
+    
+    # Convert string levels to logging constants
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    
+    file_level = level_map.get(level, logging.INFO)
+    console_log_level = level_map.get(console_level, file_level)
+    
+    # Ensure logs directory exists
+    Path("logs").mkdir(exist_ok=True)
+    
+    # Remove any existing handlers to avoid conflicts
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Create handlers
+    file_handler = logging.FileHandler("logs/etl.log", encoding='utf-8')
+    file_handler.setLevel(file_level)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(console_log_level)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Configure root logger
+    root_logger.setLevel(min(file_level, console_log_level))
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+
 def clear_arcpy_caches():
     """Clear ArcPy internal caches and reset workspace to avoid locks."""
     try:
@@ -195,19 +238,7 @@ def main():
     # Set increased recursion limit to handle deeply nested API responses
     sys.setrecursionlimit(3000)
 
-    # Ensure logs directory exists
-    Path("logs").mkdir(exist_ok=True)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler("logs/etl.log", encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("Starting ETL process...")
-
+    # Parse arguments first to get config path
     p = argparse.ArgumentParser()
     p.add_argument("--config", default=None, help="Path to config.yaml")
     p.add_argument("--sources", default=None, help="Path to sources.yaml")
@@ -218,11 +249,17 @@ def main():
     p.add_argument("--type", help="Filter by source type")
     args = p.parse_args()
 
+    # Load configuration first
     try:
         cfg = load_config(args.config, args.sources)
     except ConfigError as e:
-        logging.error(f"Config error: {e}")
+        # Use basic logging for config errors since we haven't configured logging yet
+        print(f"Config error: {e}", file=sys.stderr)
         raise SystemExit(f"Config error: {e}")
+
+    # Now configure logging based on the loaded configuration
+    configure_logging(cfg)
+    logging.info("Starting ETL process...")
 
     ensure_workspaces(cfg)
 

@@ -39,17 +39,29 @@ def best_shapefile_by_count(paths: List[Path]) -> Optional[Path]:
     return best if best_count > 0 else None
 
 def get_logger() -> logging.Logger:
+    """Get a logger for the op-etl package.
+    
+    Returns a logger that respects the existing logging configuration
+    instead of creating its own handlers.
+    """
     log = logging.getLogger("op-etl")
-    if log.handlers:
+    
+    # If the root logger already has handlers (configured by run.py),
+    # don't add our own handlers to avoid duplication
+    if logging.getLogger().handlers:
         return log
-    log.setLevel(logging.DEBUG)
-    ch = logging.StreamHandler(sys.stdout)
-    fh = logging.FileHandler("op-etl.log", encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    ch.setFormatter(fmt)
-    fh.setFormatter(fmt)
-    log.addHandler(ch)
-    log.addHandler(fh)
+    
+    # Fallback configuration if no logging has been set up yet
+    # (e.g., when modules are used standalone)
+    if not log.handlers:
+        log.setLevel(logging.INFO)  # Default to INFO instead of DEBUG
+        ch = logging.StreamHandler(sys.stdout)
+        fh = logging.FileHandler("op-etl.log", encoding="utf-8")
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+        ch.setFormatter(fmt)
+        fh.setFormatter(fmt)
+        log.addHandler(ch)
+        log.addHandler(fh)
     return log
 
 
