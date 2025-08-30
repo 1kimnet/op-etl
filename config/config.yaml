@@ -16,12 +16,15 @@ cleanup_staging_before_run: true     # Clean staging folder before each run (rec
 
 # Logging configuration
 logging:
-  level: "INFO"
-  console_level: "INFO"
-  summary_file: "etl_summary.log"
-  debug_file: "etl_debug.log"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  max_file_size_mb: 10
+  level: "WARNING"          # Root level: DEBUG|INFO|WARNING|ERROR|CRITICAL
+  console_level: "WARNING"  # Console override; defaults to level if omitted
+  format: "%(asctime)s - %(levelname)s - [%(name)s] %(message)s"
+
+  # File outputs are optional. If set, logs/ is ensured.
+  summary_file: "logs/etl.log"         # Rotates if max_file_size_mb > 0
+  debug_file: "logs/etl.debug.log"     # Always DEBUG level
+
+  max_file_size_mb: 20                 # 0 for no rotation
   backup_count: 5
 
 # Retry and resilience configuration

@@ -38,31 +38,12 @@ def best_shapefile_by_count(paths: List[Path]) -> Optional[Path]:
 
     return best if best_count > 0 else None
 
-def get_logger() -> logging.Logger:
+def get_logger(name: str = "op-etl") -> logging.Logger:
     """Get a logger for the op-etl package.
     
-    Returns a logger that respects the existing logging configuration
-    instead of creating its own handlers.
+    Respects the global config. No handlers here.
     """
-    log = logging.getLogger("op-etl")
-    
-    # If the root logger already has handlers (configured by run.py),
-    # don't add our own handlers to avoid duplication
-    if logging.getLogger().handlers:
-        return log
-    
-    # Fallback configuration if no logging has been set up yet
-    # (e.g., when modules are used standalone)
-    if not log.handlers:
-        log.setLevel(logging.INFO)  # Default to INFO instead of DEBUG
-        ch = logging.StreamHandler(sys.stdout)
-        fh = logging.FileHandler("op-etl.log", encoding="utf-8")
-        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-        ch.setFormatter(fmt)
-        fh.setFormatter(fmt)
-        log.addHandler(ch)
-        log.addHandler(fh)
-    return log
+    return logging.getLogger(name)
 
 
 def log_http_request(log: logging.Logger, session, method: str, url: str, **kwargs):
