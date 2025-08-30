@@ -13,9 +13,6 @@ from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
 
-
-
-
 def clear_arcpy_caches():
     """Clear ArcPy internal caches and reset workspace to avoid locks."""
     try:
