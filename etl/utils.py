@@ -38,19 +38,12 @@ def best_shapefile_by_count(paths: List[Path]) -> Optional[Path]:
 
     return best if best_count > 0 else None
 
-def get_logger() -> logging.Logger:
-    log = logging.getLogger("op-etl")
-    if log.handlers:
-        return log
-    log.setLevel(logging.DEBUG)
-    ch = logging.StreamHandler(sys.stdout)
-    fh = logging.FileHandler("op-etl.log", encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    ch.setFormatter(fmt)
-    fh.setFormatter(fmt)
-    log.addHandler(ch)
-    log.addHandler(fh)
-    return log
+def get_logger(name: str = "op-etl") -> logging.Logger:
+    """Get a logger for the op-etl package.
+    
+    Respects the global config. No handlers here.
+    """
+    return logging.getLogger(name)
 
 
 def log_http_request(log: logging.Logger, session, method: str, url: str, **kwargs):

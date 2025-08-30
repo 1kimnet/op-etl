@@ -195,19 +195,10 @@ def main():
     # Set increased recursion limit to handle deeply nested API responses
     sys.setrecursionlimit(3000)
 
-    # Ensure logs directory exists
-    Path("logs").mkdir(exist_ok=True)
+    # 1) absolutely no logging.basicConfig here
+    Path("logs").mkdir(exist_ok=True)  # safe to prep early
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler("logs/etl.log", encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("Starting ETL process...")
-
+    # Parse arguments first to get config path
     p = argparse.ArgumentParser()
     p.add_argument("--config", default=None, help="Path to config.yaml")
     p.add_argument("--sources", default=None, help="Path to sources.yaml")
@@ -218,11 +209,20 @@ def main():
     p.add_argument("--type", help="Filter by source type")
     args = p.parse_args()
 
+    # Load configuration first
     try:
         cfg = load_config(args.config, args.sources)
     except ConfigError as e:
-        logging.error(f"Config error: {e}")
+        # Use basic logging for config errors since we haven't configured logging yet
+        print(f"Config error: {e}", file=sys.stderr)
         raise SystemExit(f"Config error: {e}")
+
+    # 2) now configure logging from YAML
+    from etl.logging_config import setup_logging
+    setup_logging(cfg.get("logging"))
+
+    # 3) proceed with ETL; all modules just use logging.getLogger(__name__)
+    logging.info("Starting ETL process...")
 
     ensure_workspaces(cfg)
 
