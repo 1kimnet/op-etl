@@ -73,76 +73,82 @@ def run(cfg):
     logging.info(f"[PROCESS] Processed {processed_count} feature classes")
 
 def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wkid: Optional[int] = None) -> bool:
-    """Process a single feature class with clipping and reprojection."""
-    import arcpy  # lazy import
+    """Process a feature class with clipping and reprojection to EPSG:3010."""
+    import arcpy
     needs_processing = False
     temp_fcs = []
     current_fc = fc_path
 
     try:
-        # Check if feature class has any features before processing
+        # Check feature count
         feature_count = int(str(arcpy.management.GetCount(current_fc)[0]))
         if feature_count == 0:
             logging.info(f"[PROCESS] Skipping empty feature class: {fc_path}")
             return False
 
-        # Apply AOI clipping if configured and AOI exists
+        # Apply AOI clipping for Strängnäs area if configured
         if aoi_fc and arcpy.Exists(aoi_fc):
             try:
                 temp_clip = f"{fc_path}_temp_clip"
-                logging.debug(f"[PROCESS] Clipping {fc_path} with AOI {aoi_fc}")
+                logging.debug("[PROCESS] Clipping to Strängnäs area")
                 arcpy.analysis.Clip(current_fc, aoi_fc, temp_clip)
 
-                # Check if clipping produced any features
-                try:
-                    clip_count = int(str(arcpy.management.GetCount(temp_clip)[0]))
-                except (ValueError, IndexError) as e:
-                    # Handle case where count operation fails
-                    clip_count = 0
-                    logging.warning(f"Could not get feature count: {e}")
-
+                clip_count = int(str(arcpy.management.GetCount(temp_clip)[0]))
                 if clip_count > 0:
                     temp_fcs.append(temp_clip)
                     current_fc = temp_clip
                     needs_processing = True
                     logging.debug(f"[PROCESS] Clipped {feature_count} -> {clip_count} features")
                 else:
-                    logging.info(f"[PROCESS] Clipping resulted in no features for {fc_path}")
-                    # Clean up empty result
+                    logging.info(f"[PROCESS] No features in Strängnäs area for {fc_path}")
                     if arcpy.Exists(temp_clip):
                         arcpy.management.Delete(temp_clip)
                     return False
             except Exception as e:
-                logging.warning(f"[PROCESS] Clipping failed for {fc_path}: {e}")
-                # Continue without clipping if it fails
+                logging.warning(f"[PROCESS] Clipping failed: {e}")
 
-        # Apply reprojection if needed
+        # Project to SWEREF99 16 30 (EPSG:3010) if needed
         if target_wkid:
             try:
                 desc = arcpy.Describe(current_fc)
                 current_wkid = desc.spatialReference.factoryCode
+
                 if current_wkid != target_wkid:
                     temp_proj = f"{fc_path}_temp_proj"
                     target_sr = arcpy.SpatialReference(target_wkid)
-                    logging.debug(f"[PROCESS] Reprojecting {current_fc} from {current_wkid} to {target_wkid}")
-                    arcpy.management.Project(current_fc, temp_proj, target_sr)
+
+                    logging.debug(f"[PROCESS] Reprojecting from EPSG:{current_wkid} to EPSG:{target_wkid}")
+
+                    # Use appropriate transformation for SWEREF99 TM to SWEREF99 16 30
+                    if current_wkid == 3006 and target_wkid == 3010:
+                        # Direct transformation between SWEREF99 variants
+                        arcpy.management.Project(current_fc, temp_proj, target_sr)
+                    elif current_wkid == 4326 and target_wkid == 3010:
+                        # WGS84 to SWEREF99 16 30
+                        transform = "WGS_1984_To_SWEREF99"
+                        arcpy.management.Project(current_fc, temp_proj, target_sr, transform)
+                    else:
+                        # Default transformation
+                        arcpy.management.Project(current_fc, temp_proj, target_sr)
+
                     temp_fcs.append(temp_proj)
                     current_fc = temp_proj
                     needs_processing = True
-            except Exception as e:
-                logging.warning(f"[PROCESS] Reprojection failed for {fc_path}: {e}")
-                # Skip reprojection if we can't determine current SRID
+                else:
+                    logging.debug(f"[PROCESS] Already in target SR EPSG:{target_wkid}")
 
-        # Replace original with processed version if processing was done
+            except Exception as e:
+                logging.warning(f"[PROCESS] Reprojection failed: {e}")
+
+        # Replace original with processed version
         if needs_processing and current_fc != fc_path:
             try:
                 arcpy.management.Delete(fc_path)
                 arcpy.management.Rename(current_fc, fc_path)
-                # Remove renamed FC from cleanup list
                 if current_fc in temp_fcs:
                     temp_fcs.remove(current_fc)
             except Exception as e:
-                logging.error(f"[PROCESS] Failed to replace original feature class {fc_path}: {e}")
+                logging.error(f"[PROCESS] Failed to replace original: {e}")
                 return False
 
         return needs_processing
@@ -151,10 +157,10 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
         logging.error(f"Processing failed for {fc_path}: {e}")
         return False
     finally:
-        # Cleanup temporary feature classes
+        # Cleanup
         for temp_fc in temp_fcs:
             try:
                 if arcpy.Exists(temp_fc):
                     arcpy.management.Delete(temp_fc)
             except Exception:
-                pass  # Ignore cleanup errors
+                pass

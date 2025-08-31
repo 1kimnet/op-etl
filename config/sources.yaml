@@ -1,7 +1,7 @@
 # Global defaults for bbox filtering (inherited by sources that don't specify their own)
 # Updated to use SWEREF99 TM (EPSG:3006) for REST APIs as best practice
 defaults:
-  # Stockholm region in SWEREF99 TM coordinates (meters)
+  # Strängnäs region in SWEREF99 TM coordinates (meters)
   bbox: [610000, 6550000, 700000, 6650000]
   bbox_sr: 3006
 
