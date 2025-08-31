@@ -481,7 +481,7 @@ sources:
     response_format: json
     layer_ids:
     - 2  # Instabila slänter - Mycket kraftig lutning
-    - 3  # Angränsande slänter med kraftig lutning
+#    - 3  # Angränsande slänter med kraftig lutning
     - 4  # Slänter - Område som kan påverkas vid ras
     - 6  # Ravinformation - Möjlig ravinformation
     - 7  # Ravinformation - Vattendrag i anslutning
@@ -624,7 +624,6 @@ sources:
     response_format: json
     layer_ids:
     - 2
-    - 5
     in_sr: 3006
     out_sr: 3006
     bbox_sr: 3006

@@ -2,6 +2,8 @@
 Simple, reliable staging system for OP-ETL with SR consistency enforcement.
 Replace etl/stage_files.py with this implementation.
 """
+
+import contextlib
 import logging
 import shutil
 import zipfile
@@ -61,9 +63,9 @@ def stage_all_downloads(cfg: dict) -> None:
         # Import each file
         for file_path in files_found:
             safe_name = create_safe_name(file_path, authority_name)
-            success = import_file_to_staging(file_path, gdb_path, safe_name)
-
-            if success:
+            if success := import_file_to_staging(
+                file_path, gdb_path, safe_name
+            ):
                 imported_count += 1
                 logging.info(f"[STAGE] + {file_path.name} -> {safe_name}")
             else:
@@ -79,6 +81,7 @@ def discover_files(directory: Path) -> list[Path]:
     patterns = [
         '*.gpkg',     # GeoPackage files (usually best quality)
         '*.geojson',  # GeoJSON (from REST/OGC/WFS)
+        '*.json',     # Esri JSON (from REST)
         '*.shp',      # Shapefiles
         '*.zip'       # ZIP archives (may contain shapefiles/gpkg)
     ]
@@ -95,7 +98,7 @@ def discover_files(directory: Path) -> list[Path]:
     for file_path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
         # Skip legacy paginated files like part_001.geojson
         fname = file_path.name.lower()
-        if fname.endswith('.geojson') and fname.startswith('part_'):
+        if (fname.endswith('.geojson') or fname.endswith('.json')) and fname.startswith('part_'):
             continue
         # Use file stem to avoid duplicate processing of same dataset
         stem_key = file_path.stem.lower()
@@ -129,13 +132,10 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
     out_fc = f"{gdb_path.replace(chr(92), '/')}/{staging_name}"
 
     # Clean up existing feature class (best effort)
-    try:
+    with contextlib.suppress(Exception):
         import arcpy
         if arcpy.Exists(out_fc):
             arcpy.management.Delete(out_fc)
-    except Exception:
-        pass
-
     try:
         # Route to appropriate importer based on file type
         suffix = file_path.suffix.lower()
@@ -144,6 +144,8 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
             return import_gpkg(file_path, out_fc)
         elif suffix == '.geojson':
             return import_geojson(file_path, out_fc)
+        elif suffix == '.json':
+            return import_esri_json(file_path, out_fc)
         elif suffix == '.shp':
             return import_shapefile(file_path, out_fc)
         elif suffix == '.zip':
@@ -228,7 +230,7 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
 
         # Method 2: Use arcpy.Describe as fallback
         if not layers:
-            try:
+            with contextlib.suppress(Exception):
                 desc = arcpy.Describe(str(gpkg_path))
                 if hasattr(desc, 'children'):
                     for child in desc.children:
@@ -236,9 +238,6 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
                             clean_name = child.name.replace("main.", "")
                             if clean_name not in layers:
                                 layers.append(clean_name)
-            except Exception:
-                pass  # Fallback failed, continue with empty list
-
         logging.debug(f"[STAGE] GPKG {gpkg_path.name} layers: {layers}")
         return layers
 
@@ -306,12 +305,9 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
             logging.warning(f"[STAGE] Unknown SR in {geojson_path.name}, assuming WGS84")
             detected_sr = WGS84_DD
 
-        # Validate coordinate magnitudes
-        features = geojson_data.get('features', [])
-        if features:
+        if features := geojson_data.get('features', []):
             first_geom = features[0].get('geometry', {})
-            coords = first_geom.get('coordinates')
-            if coords:
+            if coords := first_geom.get('coordinates'):
                 flat_coords = _flatten_coordinates(coords)
                 if flat_coords and not validate_coordinates_magnitude(flat_coords[:2], detected_sr):
                     logging.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path.name}")
@@ -338,6 +334,24 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
         return True
     except Exception as e:
         logging.error(f"[STAGE] GeoJSON import failed: {e}")
+        return False
+
+def import_esri_json(json_path: Path, out_fc: str) -> bool:
+    """Import Esri JSON via ArcPy JSONToFeatures.
+    This tool natively understands Esri JSON and its spatialReference object.
+    """
+    try:
+        import arcpy
+        arcpy.conversion.JSONToFeatures(str(json_path), out_fc)
+
+        # Verify the SR was set correctly, otherwise log a warning.
+        desc = arcpy.Describe(out_fc)
+        if desc.spatialReference.name == "Unknown":
+            logging.warning(f"[STAGE] SR is Unknown after importing Esri JSON: {json_path.name}. Check the file's 'spatialReference' object.")
+
+        return True
+    except Exception as e:
+        logging.error(f"[STAGE] Esri JSON import failed for {json_path.name}: {e}")
         return False
 
 def _ensure_fc_spatial_reference(fc_path: str, epsg_code: int):
@@ -398,10 +412,8 @@ def import_zip(zip_path: Path, out_fc: str) -> bool:
     finally:
         # Cleanup extraction directory
         if extract_dir.exists():
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(extract_dir)
-            except Exception:
-                pass  # Best effort cleanup
 
 def ensure_gdb_exists(gdb_path: str) -> None:
     """Ensure staging geodatabase exists."""

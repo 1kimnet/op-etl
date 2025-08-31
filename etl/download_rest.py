@@ -72,15 +72,18 @@ def coerce_bbox4(bbox: Optional[Sequence[float | int]]) -> Optional[BBox]:
 def build_rest_params(cfg: Dict[str, Any], bbox_3006: Optional[BBox] = None) -> Dict[str, Any]:
     """Build REST API parameters."""
     fmt = (cfg.get("response_format") or cfg.get("format") or "json").lower()
+    is_geojson = fmt == "geojson"
 
     params = {
         "where": cfg.get("where") or cfg.get("where_clause") or "1=1",
         "outFields": cfg.get("out_fields") or "*",
         "returnGeometry": "true",
-        "f": "geojson" if fmt == "geojson" else "json"
+        "f": "geojson" if is_geojson else "json"
     }
 
-    if fmt != "geojson":
+    # For Esri JSON, we request geometry in the target SR.
+    # For GeoJSON, the standard mandates WGS84 (4326), so we don't set outSR.
+    if not is_geojson:
         params["outSR"] = cfg.get("out_sr") or cfg.get("stage_sr") or SWEREF99_TM
 
     if bbox_3006:
@@ -271,81 +274,66 @@ def download_layer(
     try:
         log.info(f"[REST] Downloading: {layer_url}")
 
-        # Get layer info
         response = session.safe_get(layer_url, params={"f": "json"}, timeout=30)
-
-        if not response or not validate_response_content(response):
-            return 0
-
-        if not (layer_info := safe_json_parse(response.content)):
+        if not response or not validate_response_content(response) or not (layer_info := safe_json_parse(response.content)):
             return 0
 
         if not layer_info.get("supportsQuery", True):
             log.warning("[REST] Layer doesn't support queries")
             return 0
 
-        # Prepare bbox
         bbox_raw = raw_config.get("bbox") or global_bbox
         bbox_3006 = coerce_bbox4(bbox_raw) if bbox_raw else None
-
-        # Build parameters
         base_params = build_rest_params(raw_config, bbox_3006)
 
-        # Download features
-        all_features = []
-        request_count = 0
-
+        result_data = None
         # Try offset pagination first
         try:
-            all_features, request_count = _download_with_offset_pagination(
-                session, layer_url, base_params, layer_name
+            result_data, _ = _download_with_offset_pagination(
+                session, layer_url, base_params
             )
         except TransferLimitExceededError:
-            # Fall back to OID pagination if supported
             if layer_info.get("supportsAdvancedQueries", False):
                 log.info("[REST] Switching to OID pagination")
                 oid_field = layer_info.get("objectIdField", "OBJECTID")
-                all_features, request_count = _download_with_oid_pagination(
-                    session, layer_url, base_params, oid_field, layer_name
+                result_data, _ = _download_with_oid_pagination(
+                    session, layer_url, base_params, oid_field
                 )
 
-        # Save results
-        out_file = out_dir / f"{layer_name}.geojson"
-        geojson = {"type": "FeatureCollection", "features": all_features}
-
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(geojson, f, ensure_ascii=False, separators=(",", ":"))
-
-        if not all_features:
+        if not result_data:
             log.warning(f"[REST] No features found for {layer_name}")
             diagnose_rest_response(layer_url, raw_config)
-        else:
-            log.info(f"[REST] Saved {len(all_features)} features")
+            return 0
 
-        return len(all_features)
+        # Determine file extension based on format
+        is_geojson = base_params.get("f") == "geojson"
+        file_ext = ".geojson" if is_geojson else ".json"
+        out_file = out_dir / f"{layer_name}{file_ext}"
+
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(result_data, f, ensure_ascii=False, separators=(",", ":"))
+
+        feature_count = len(result_data.get("features", []))
+        log.info(f"[REST] Saved {feature_count} features to {out_file.name}")
+        return feature_count
 
     except Exception as e:
-        log.error(f"[REST] Failed to download: {e}")
+        log.error(f"[REST] Failed to download layer {layer_name}: {e}")
         return 0
 
 
 def _download_with_offset_pagination(
-    session: RecursionSafeSession,
-    layer_url: str,
-    base_params: Dict,
-    layer_name: str
-) -> Tuple[List[Dict], int]:
-    """Download using offset pagination."""
+    session: RecursionSafeSession, layer_url: str, base_params: Dict
+) -> Tuple[Optional[Dict], int]:
+    """Download using offset pagination, merging results into a single valid JSON object."""
     all_features = []
     offset = 0
     page_size = 1000
     request_count = 0
+    first_page_data = None
 
-    params = base_params | {
-        "resultOffset": 0,
-        "resultRecordCount": page_size
-    }
-
+    params = base_params.copy()
+    params["resultRecordCount"] = page_size
     query_url = f"{layer_url}/query"
 
     while True:
@@ -353,11 +341,15 @@ def _download_with_offset_pagination(
         response = session.safe_get(query_url, params=params, timeout=60)
         request_count += 1
 
-        if not response or not validate_response_content(response):
+        if not response or not validate_response_content(response) or not (data := safe_json_parse(response.content)):
             break
 
-        if not (data := safe_json_parse(response.content)):
-            break
+        if request_count == 1:
+            first_page_data = data.copy()
+            # It's possible the first page has no features but we still need the structure
+            if "features" not in first_page_data:
+                 first_page_data["features"] = []
+
 
         features = data.get("features", [])
         exceeded_limit = data.get("exceededTransferLimit", False)
@@ -366,66 +358,65 @@ def _download_with_offset_pagination(
             all_features.extend(features)
             log.debug(f"[REST] Page {request_count}: {len(features)} features")
 
-        # Stop conditions
-        if not features:
+        if not features or (len(features) < page_size and not exceeded_limit):
             break
-        elif len(features) < page_size and not exceeded_limit:
-            break
-        elif exceeded_limit and len(features) < page_size:
-            raise TransferLimitExceededError()
+
+        if exceeded_limit and len(features) < page_size:
+            raise TransferLimitExceededError("Exceeded transfer limit with partial page, switching strategy.")
 
         offset += page_size
-
-        if offset > 1000000:
-            log.warning("[REST] Safety limit reached")
+        if offset > 1_000_000: # Safety break
+            log.warning("[REST] Offset safety limit reached (1,000,000).")
             break
 
-    return all_features, request_count
+    if first_page_data:
+        first_page_data["features"] = all_features
+        return first_page_data, request_count
+
+    return None, request_count
 
 
 def _download_with_oid_pagination(
-    session: RecursionSafeSession,
-    layer_url: str,
-    base_params: Dict,
-    oid_field: str,
-    layer_name: str
-) -> Tuple[List[Dict], int]:
+    session: RecursionSafeSession, layer_url: str, base_params: Dict, oid_field: str
+) -> Tuple[Optional[Dict], int]:
     """Download using OID pagination."""
     query_url = f"{layer_url}/query"
+    # Get all OIDs first
+    oid_params = {**base_params, "returnIdsOnly": "true", "f": "json"}
 
-    # Get all OIDs
-    oid_params = base_params.copy()
-    oid_params |= {"returnIdsOnly": "true", "f": "json"}
-
-    response = session.safe_get(query_url, params=oid_params, timeout=60)
-    request_count = 1
-
+    response = session.safe_get(query_url, params=oid_params, timeout=180)
+    request_count = 0 + 1
     if not response or not (data := safe_json_parse(response.content)):
-        return [], request_count
+        return None, request_count
 
     object_ids = data.get("objectIds", [])
     if not object_ids:
-        return [], request_count
+        return None, request_count
+    log.info(f"[REST] Found {len(object_ids)} OIDs using field '{oid_field}'")
 
-    log.info(f"[REST] Found {len(object_ids)} OIDs")
-
-    # Fetch in batches
+    # Fetch features in batches
     all_features = []
     batch_size = 1000
-
     for i in range(0, len(object_ids), batch_size):
         batch_ids = object_ids[i:i + batch_size]
         oid_where = f"{oid_field} IN ({','.join(map(str, batch_ids))})"
 
         feature_params = base_params.copy()
         original_where = feature_params.get("where", "1=1")
-        feature_params["where"] = f"({original_where}) AND {oid_where}" if original_where != "1=1" else oid_where
+        feature_params["where"] = f"({original_where}) AND ({oid_where})"
 
         response = session.safe_get(query_url, params=feature_params, timeout=60)
         request_count += 1
-
         if response and (data := safe_json_parse(response.content)):
-            if features := data.get("features", []):
-                all_features.extend(features)
+            all_features.extend(data.get("features", []))
 
-    return all_features, request_count
+    # To create a valid Esri JSON, we need the metadata from a regular query.
+    # We'll make one more request to get the structure, then replace its features.
+    meta_params = {**base_params, "resultRecordCount": 1}
+    meta_response = session.safe_get(query_url, params=meta_params, timeout=60)
+    request_count += 1
+    if meta_response and (meta_data := safe_json_parse(meta_response.content)):
+        meta_data["features"] = all_features
+        return meta_data, request_count
+
+    return None, request_count
