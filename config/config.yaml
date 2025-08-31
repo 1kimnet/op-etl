@@ -181,7 +181,7 @@ geoprocessing:
   enabled: true
   aoi_boundary: "./data/connections/municipality_boundary.shp"
   target_srid: 3010  # SWEREF99 16 30
-  parallel_processing_factor: "100%"
+  parallel_processing_factor: "80%"
   cleanup_intermediate: true  # Remove processed GDBs after SDE load
 
 # Handle potential duplicates in existing datasets

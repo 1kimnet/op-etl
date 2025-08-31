@@ -239,3 +239,4 @@ config/sources_backup.yaml
 .github\instructions\codacy.instructions.md
 BBOX_ENHANCEMENT_SUMMARY.md
 test_filtering.py
+tests/test_rest.py
