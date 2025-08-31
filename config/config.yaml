@@ -131,11 +131,11 @@ continue_on_failure: true
 # For REST APIs: use SWEREF99 TM coordinates (EPSG:3006)
 # For OGC APIs: use CRS84 coordinates (lon/lat)
 global_bbox:
-  coords: [610000, 6550000, 700000, 6650000]  # SWEREF99 TM (meters) for Stockholm region
+  coords: [610000, 6550000, 700000, 6650000]  # SWEREF99 TM (meters)
   crs: 3006
 
 global_ogc_bbox:
-  coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]  # CRS84 (degrees) for Stockholm region
+  coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]  # CRS84 (degrees)
   crs: "CRS84"
 
 ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
