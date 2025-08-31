@@ -7,17 +7,17 @@ import shutil
 import zipfile
 from pathlib import Path
 
-import arcpy
-
-from .utils import make_arcpy_safe_name
 from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
+
+# Lazy ArcPy usage: import inside functions to avoid heavy init before logging
+from .utils import make_arcpy_safe_name
 
 
 def _flatten_coordinates(coords):
     """Flatten nested coordinate arrays to a flat list of numbers."""
     if not coords:
         return []
-    
+
     flat = []
     for item in coords:
         if isinstance(item, (list, tuple)):
@@ -130,6 +130,7 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
 
     # Clean up existing feature class (best effort)
     try:
+        import arcpy
         if arcpy.Exists(out_fc):
             arcpy.management.Delete(out_fc)
     except Exception:
@@ -158,6 +159,7 @@ def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) ->
 def import_gpkg(gpkg_path: Path, out_fc: str) -> bool:
     """Import GPKG using actual layer discovery."""
     try:
+        import arcpy
         # Discover actual layers in the GPKG
         layers = discover_gpkg_layers(gpkg_path)
 
@@ -180,7 +182,7 @@ def import_gpkg(gpkg_path: Path, out_fc: str) -> bool:
                 # Ensure proper SR definition and project if needed
                 desc = arcpy.Describe(out_fc)
                 current_sr = desc.spatialReference
-                
+
                 if current_sr.name == "Unknown" or not current_sr.name:
                     logging.warning(f"[STAGE] Unknown SR in GPKG layer {layer_name}, assuming SWEREF99 TM")
                     sr = arcpy.SpatialReference(SWEREF99_TM)
@@ -215,6 +217,7 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
     layers = []
 
     try:
+        import arcpy
         # Method 1: Use arcpy.da.Walk (most reliable)
         for dirpath, dirnames, filenames in arcpy.da.Walk(str(gpkg_path), datatype="FeatureClass"):
             for filename in filenames:
@@ -246,17 +249,18 @@ def discover_gpkg_layers(gpkg_path: Path) -> list[str]:
 def import_shapefile(shp_path: Path, out_fc: str) -> bool:
     """Import shapefile with SR validation and projection."""
     try:
+        import arcpy
         # Import shapefile
         arcpy.conversion.FeatureClassToFeatureClass(
             str(shp_path),
             str(Path(out_fc).parent),
             Path(out_fc).name
         )
-        
+
         # Check and fix SR if needed
         desc = arcpy.Describe(out_fc)
         current_sr = desc.spatialReference
-        
+
         if current_sr.name == "Unknown" or not current_sr.name:
             logging.warning(f"[STAGE] Unknown SR in {shp_path.name}, checking for .prj file")
             prj_path = shp_path.with_suffix('.prj')
@@ -269,7 +273,7 @@ def import_shapefile(shp_path: Path, out_fc: str) -> bool:
                 sr = arcpy.SpatialReference(SWEREF99_TM)
                 arcpy.management.DefineProjection(out_fc, sr)
                 logging.warning(f"[STAGE] No .prj file, assumed EPSG:{SWEREF99_TM} for {shp_path.name}")
-        
+
         # Project to SWEREF99 TM if needed
         desc = arcpy.Describe(out_fc)  # Re-describe to get updated SR
         current_sr = desc.spatialReference
@@ -282,7 +286,7 @@ def import_shapefile(shp_path: Path, out_fc: str) -> bool:
                 logging.info(f"[STAGE] Projected {shp_path.name} from EPSG:{current_sr.factoryCode} to EPSG:{SWEREF99_TM}")
             except Exception as e:
                 logging.warning(f"[STAGE] Projection failed for {shp_path.name}: {e}")
-        
+
         return True
     except Exception as e:
         logging.error(f"[STAGE] Shapefile import failed: {e}")
@@ -291,16 +295,17 @@ def import_shapefile(shp_path: Path, out_fc: str) -> bool:
 def import_geojson(geojson_path: Path, out_fc: str) -> bool:
     """Import GeoJSON via ArcPy JSONToFeatures with SR validation and projection."""
     try:
+        import arcpy
         # First, validate and detect SR from GeoJSON
         with open(geojson_path, 'r', encoding='utf-8') as f:
             import json
             geojson_data = json.load(f)
-            
+
         detected_sr = detect_sr_from_geojson(geojson_data)
         if not detected_sr:
             logging.warning(f"[STAGE] Unknown SR in {geojson_path.name}, assuming WGS84")
             detected_sr = WGS84_DD
-            
+
         # Validate coordinate magnitudes
         features = geojson_data.get('features', [])
         if features:
@@ -311,13 +316,13 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                 if flat_coords and not validate_coordinates_magnitude(flat_coords[:2], detected_sr):
                     logging.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path.name}")
                     return False
-        
+
         # Import via JSONToFeatures
         arcpy.conversion.JSONToFeatures(str(geojson_path), out_fc)
-        
+
         # Ensure the output FC has a proper SR definition
         _ensure_fc_spatial_reference(out_fc, detected_sr)
-        
+
         # Project to SWEREF99 TM if needed
         if detected_sr != SWEREF99_TM:
             projected_fc = f"{out_fc}_proj"
@@ -329,7 +334,7 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
             except Exception as e:
                 logging.warning(f"[STAGE] Projection failed for {geojson_path.name}: {e}")
                 # Keep original if projection fails
-        
+
         return True
     except Exception as e:
         logging.error(f"[STAGE] GeoJSON import failed: {e}")
@@ -338,9 +343,10 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
 def _ensure_fc_spatial_reference(fc_path: str, epsg_code: int):
     """Ensure feature class has proper spatial reference definition."""
     try:
+        import arcpy
         desc = arcpy.Describe(fc_path)
         current_sr = desc.spatialReference
-        
+
         if current_sr.name == "Unknown" or not current_sr.name:
             # Define projection if unknown
             sr = arcpy.SpatialReference(epsg_code)
@@ -348,7 +354,7 @@ def _ensure_fc_spatial_reference(fc_path: str, epsg_code: int):
             logging.info(f"[STAGE] Defined SR {epsg_code} for {fc_path}")
         else:
             logging.debug(f"[STAGE] SR already defined: {current_sr.name} (EPSG:{current_sr.factoryCode})")
-            
+
     except Exception as e:
         logging.warning(f"[STAGE] Failed to ensure SR for {fc_path}: {e}")
 
@@ -403,10 +409,14 @@ def ensure_gdb_exists(gdb_path: str) -> None:
 
     if not gdb_path_obj.exists():
         gdb_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        arcpy.management.CreateFileGDB(
-            str(gdb_path_obj.parent),
-            gdb_path_obj.name
-        )
+        try:
+            import arcpy
+            arcpy.management.CreateFileGDB(
+                str(gdb_path_obj.parent),
+                gdb_path_obj.name
+            )
+        except Exception as e:
+            logging.error(f"[STAGE] Failed to create staging GDB: {e}")
         logging.info(f"[STAGE] Created staging GDB: {gdb_path}")
 
 def clear_staging_gdb(gdb_path: str) -> None:
@@ -414,6 +424,7 @@ def clear_staging_gdb(gdb_path: str) -> None:
     try:
         # Use arcpy.da.Walk to list feature classes without changing workspace
         feature_classes = []
+        import arcpy
         for dirpath, dirnames, filenames in arcpy.da.Walk(gdb_path, datatype="FeatureClass"):
             feature_classes.extend(filenames)
 

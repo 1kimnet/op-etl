@@ -17,7 +17,7 @@ cleanup_staging_before_run: true     # Clean staging folder before each run (rec
 # Logging configuration
 logging:
   level: "WARNING"          # Root level: DEBUG|INFO|WARNING|ERROR|CRITICAL
-  console_level: "WARNING"  # Console override; defaults to level if omitted
+  console_level: "INFO"  # Console override; defaults to level if omitted
   format: "%(asctime)s - %(levelname)s - [%(name)s] %(message)s"
 
   # File outputs are optional. If set, logs/ is ensured.
@@ -137,30 +137,30 @@ global_bbox:
 global_ogc_bbox:
   coords: [16.5008129, 59.0906713, 17.6220373, 59.6050281]  # CRS84 (degrees) for Stockholm region
   crs: "CRS84"
-  
+
 ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
 
 # Spatial Reference Configuration
 spatial_reference:
   # Enforce SR consistency throughout pipeline
   enforce_consistency: true
-  
+
   # Default SRs for different source types
   rest_api:
     bbox_sr: 3006    # Filter bbox in SWEREF99 TM
     in_sr: 3006      # Input SR for geometry parameter
     out_sr: 3006     # Output SR for response
     target_sr: 3006  # Final staging SR
-    
+
   ogc_api:
     bbox_crs: "CRS84"          # Default to CRS84 for bbox
     prefer_crs: "EPSG:3006"    # Prefer EPSG:3006 if supported
     stage_sr: 4326             # Stage in WGS84 if using CRS84
     target_sr: 3006            # Project to SWEREF99 TM
-    
+
   file_sources:
     target_sr: 3006            # Always project to SWEREF99 TM
-    
+
   validation:
     magnitude_check: true      # Validate coordinate magnitudes
     envelope_check: true       # Validate response envelope vs bbox

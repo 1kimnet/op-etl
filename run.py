@@ -8,8 +8,6 @@ import sys
 import time
 from pathlib import Path
 
-import arcpy
-
 from etl.config import ConfigError, load_config
 from etl.paths import ensure_workspaces
 
@@ -17,8 +15,11 @@ from etl.paths import ensure_workspaces
 def clear_arcpy_caches():
     """Clear ArcPy internal caches and reset workspace to avoid locks."""
     try:
+        # Lazy import to avoid heavy ArcPy init before logging
         # Reset workspace to system temp directory to avoid locks
         import tempfile
+
+        import arcpy  # noqa: F401
         temp_dir = tempfile.gettempdir()
 
         # Use setattr to avoid Pylance warnings about dynamic attributes
@@ -59,6 +60,7 @@ def remove_geodatabase_safely(gdb_path):
 
     # Step 2: Try ArcPy delete first (handles ArcGIS locks better)
     try:
+        import arcpy  # Lazy import
         if arcpy.Exists(str(gdb_path)):
             logging.debug("Using ArcPy Delete management tool")
             arcpy.management.Delete(str(gdb_path))
@@ -162,6 +164,7 @@ def create_clean_staging_gdb(staging_gdb_path):
     clear_arcpy_caches()
 
     try:
+        import arcpy  # Lazy import
         logging.info(f"Creating staging geodatabase: {staging_path}")
         arcpy.management.CreateFileGDB(str(staging_dir), gdb_name)
 

@@ -5,11 +5,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import arcpy
-
 
 def run(cfg):
     """Process all feature classes found in staging GDB."""
+    import arcpy  # lazy import
     gp = cfg.get("geoprocess", {})
     if not gp.get("enabled"):
         logging.info("[PROCESS] Geoprocessing disabled")
@@ -75,6 +74,7 @@ def run(cfg):
 
 def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wkid: Optional[int] = None) -> bool:
     """Process a single feature class with clipping and reprojection."""
+    import arcpy  # lazy import
     needs_processing = False
     temp_fcs = []
     current_fc = fc_path

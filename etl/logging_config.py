@@ -1,9 +1,10 @@
 # stdlib only; works in ArcGIS Pro/Server envs
 from __future__ import annotations
+
 import logging
 import logging.handlers
 from pathlib import Path
-from typing import Optional, Mapping, Any
+from typing import Any, Mapping, Optional
 
 DEFAULT_FMT = "%(asctime)s - %(levelname)s - [%(name)s] %(message)s"
 
@@ -24,9 +25,19 @@ def setup_logging(cfg: Optional[Mapping[str, Any]]) -> None:
     max_mb = cfg.get("max_file_size_mb", 0)
     backup_count = int(cfg.get("backup_count", 5))
 
-    # Root logger
+    # Root logger with permissive level based on configured handlers
     root = logging.getLogger()
-    root.setLevel(_coerce_level(level_name))
+    root_requested = _coerce_level(level_name)
+    console_requested = _coerce_level(console_level_name)
+
+    # Determine minimal level needed across handlers so they can filter
+    effective_root = min(root_requested, console_requested)
+    if cfg.get("debug_file"):
+        effective_root = min(effective_root, logging.DEBUG)
+    if cfg.get("summary_file"):
+        effective_root = min(effective_root, root_requested)
+
+    root.setLevel(effective_root)
 
     # Nuke old handlers to prevent duplicate lines across reruns
     for h in list(root.handlers):

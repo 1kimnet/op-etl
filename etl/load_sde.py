@@ -1,14 +1,11 @@
-# Replace etl/load_sde.py with this simplified version:
-
 import json
 import logging
 from pathlib import Path
 
-import arcpy
-
 
 def run(cfg):
     """Load all staged feature classes to SDE."""
+    import arcpy  # lazy import
     staging_gdb = cfg["workspaces"]["staging_gdb"]
     sde_conn = cfg["workspaces"].get("sde_conn")
 
@@ -88,6 +85,7 @@ def run(cfg):
 
 def load_to_sde(src_fc: str, dest_fc: str, fc_name: str) -> bool:
     """Load feature class to SDE with truncate-and-load strategy."""
+    import arcpy  # lazy import
     # Sanitize fc_name by removing file extension for SDE
     sde_fc_name = Path(fc_name).stem
 
@@ -119,6 +117,7 @@ def load_to_sde(src_fc: str, dest_fc: str, fc_name: str) -> bool:
 def create_sde_fc(template_fc: str, dest_fc: str):
     """Create feature class in SDE using staging template."""
     try:
+        import arcpy  # lazy import
         desc = arcpy.Describe(template_fc)
 
         # Extract workspace and feature class name
@@ -144,6 +143,7 @@ def resolve_sde_destination(sde_conn: str, dataset_name: str | None, fc_name: st
     Fallbacks to SDE root on failure.
     """
     try:
+        import arcpy  # lazy import
         if dataset_name:
             dataset_path = f"{sde_conn}/{dataset_name}"
             if not arcpy.Exists(dataset_path):

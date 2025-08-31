@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import arcpy
-
 from .utils import make_arcpy_safe_name
 
 
@@ -15,9 +13,14 @@ def ensure_workspaces(cfg: dict) -> None:
     gdb_parent = gdb_path.parent
     gdb_parent.mkdir(parents=True, exist_ok=True)
 
-    # Create FGDB if missing
-    if not arcpy.Exists(str(gdb_path)):
-        arcpy.management.CreateFileGDB(str(gdb_parent), gdb_path.name)
+    # Create FGDB if missing (lazy import arcpy)
+    try:
+        import arcpy
+        if not arcpy.Exists(str(gdb_path)):
+            arcpy.management.CreateFileGDB(str(gdb_parent), gdb_path.name)
+    except Exception:
+        # If arcpy unavailable, leave directory prepared; later steps may handle
+        pass
 
 
 def staging_path(cfg: dict, name: str) -> str:

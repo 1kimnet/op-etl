@@ -20,10 +20,10 @@ OP-ETL is a lightweight ETL pipeline for geospatial data in Esri environments. I
 
 ```mermaid
 flowchart LR
-    A[Download Sources] --> B[Stage in FGDB] 
+    A[Download Sources] --> B[Stage in FGDB]
     B --> C[Optional Geoprocessing]
     C --> D[Load to SDE]
-    
+
     A --> E[SR Validation]
     E --> B
     B --> F[Project to SWEREF99 TM]
@@ -31,7 +31,7 @@ flowchart LR
 ```
 
 1. **Download**: Fetch data from HTTP, REST, or OGC sources with SR consistency
-2. **Validate**: Check coordinate magnitudes and spatial reference integrity  
+2. **Validate**: Check coordinate magnitudes and spatial reference integrity
 3. **Stage**: Store datasets in FileGDB with proper SR (EPSG:3006)
 4. **Process** (optional): Clip to AOI and/or reproject
 5. **Load**: Push processed data into ArcSDE
@@ -61,14 +61,14 @@ See [Spatial Reference Consistency Documentation](docs/spatial-reference-consist
    cd op-etl
    ```
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-    ```
-   cd atlaspipe
-   ```
+1. Install dependencies:
 
-2. Create or edit `config.yaml` to define:
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+1. Create or edit `config.yaml` to define:
+
    ```yaml
    workspaces:
      downloads: ./_downloads
@@ -102,16 +102,47 @@ Run the pipeline from ArcGIS Pro's Python environment:
 python run.py
 ```
 
-Or run specific steps:
+On Windows `cmd.exe`, using ArcGIS Pro's conda Python explicitly (adjust path/env name as needed):
 
-```bash
+```cmd
+"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --process --load_sde
+```
+
+Run specific steps:
+
+```cmd
+REM Only download
 python run.py --download
+
+REM Only process
 python run.py --process
+
+REM Only load to SDE
 python run.py --load_sde
+
+REM Cleanup staging/downloads (when enabled)
 python run.py --cleanup
 ```
 
-> **Note**: If no flags are provided, all steps will run in sequence.
+> Note: If no flags are provided, all steps will run in sequence.
+
+### Logging
+
+- Console shows `INFO` and above by default (configured via `logging.console_level`).
+- Summary log (`logs/etl.log`) follows `logging.level` (default `WARNING`). It may be empty if no warnings/errors occur.
+- Debug log (`logs/etl.debug.log`) captures detailed output when `logging.debug_file` is set.
+
+To increase verbosity and include `INFO` in the summary file, edit `config/config.yaml`:
+
+```yaml
+logging:
+  level: "INFO"          # Root level (controls summary file)
+  console_level: "INFO"  # Console override
+  summary_file: "logs/etl.log"
+  debug_file: "logs/etl.debug.log"
+```
+
+If you see no immediate output, ensure you are using the ArcGIS Pro Python interpreter. ArcPy is lazily imported so logging initializes before heavy modules load.
 
 ## Roadmap
 
