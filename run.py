@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import logging
 import os
 import shutil
@@ -21,24 +22,15 @@ def clear_arcpy_caches():
         temp_dir = tempfile.gettempdir()
 
         # Use setattr to avoid Pylance warnings about dynamic attributes
-        try:
+        # Ignore if assignment fails in this environment/version
+        with contextlib.suppress(AttributeError, TypeError):
             setattr(arcpy.env, 'workspace', str(temp_dir))
-        except (AttributeError, TypeError):
-            # If workspace assignment fails, try alternative approach
-            pass
-
-        try:
+        with contextlib.suppress(AttributeError, TypeError):
             setattr(arcpy.env, 'scratchWorkspace', str(temp_dir))
-        except (AttributeError, TypeError):
-            # If scratchWorkspace assignment fails, continue
-            pass
 
-        # Clear any cached connections
-        try:
+        # Clear any cached connections (may be unavailable in some ArcPy versions)
+        with contextlib.suppress(Exception):
             arcpy.ClearWorkspaceCache_management()
-        except Exception:
-            # ClearWorkspaceCache might not be available in all ArcPy versions
-            pass
 
         # Force garbage collection
         import gc
@@ -79,11 +71,10 @@ def remove_geodatabase_safely(gdb_path):
     # Step 3: Try standard filesystem removal with retries
     def handle_remove_readonly(func, path, exc):
         """Error handler for read-only files."""
-        try:
+        # PermissionError is a subclass of OSError; suppress both via OSError
+        with contextlib.suppress(OSError):
             os.chmod(path, stat.S_IWRITE)
             func(path)
-        except (OSError, PermissionError):
-            pass  # Continue with other strategies
 
     max_attempts = 5
     for attempt in range(max_attempts):
@@ -134,19 +125,15 @@ def remove_geodatabase_safely(gdb_path):
         # Remove all contents recursively
         for item in gdb_path.rglob("*"):
             if item.is_file():
-                try:
+                with contextlib.suppress(Exception):
                     item.chmod(stat.S_IWRITE)
                     item.unlink(missing_ok=True)
-                except Exception:
-                    pass
 
         # Try to remove empty directories
         for item in sorted(gdb_path.rglob("*"), key=str, reverse=True):
             if item.is_dir() and item != gdb_path:
-                try:
+                with contextlib.suppress(Exception):
                     item.rmdir()
-                except Exception:
-                    pass
 
         # Finally try to remove the main directory
         try:
@@ -190,6 +177,54 @@ def create_clean_staging_gdb(staging_gdb_path):
         return False
 
 
+# Download flow extracted for clarity
+def _run_download(cfg, args):
+    logging.info("Starting download process...")
+
+    # Optional source filters
+    sources = cfg["sources"]
+    if args.authority:
+        sources = [s for s in sources if s.get("authority") == args.authority]
+    if args.type:
+        sources = [s for s in sources if s.get("type") == args.type]
+
+    filtered_cfg = cfg.copy()
+    filtered_cfg["sources"] = sources
+
+    from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
+
+    download_http.run(filtered_cfg)
+    download_atom.run(filtered_cfg)
+    download_ogc.run(filtered_cfg)
+    download_wfs.run(filtered_cfg)
+    download_rest.run(filtered_cfg)
+
+    logging.info("Starting staging process...")
+    from etl.stage_files import stage_all_downloads
+    stage_all_downloads(filtered_cfg)
+
+    from etl.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
+    log_pipeline_summary()
+
+    metrics_file = Path("logs") / f"pipeline_metrics_{Path().resolve().name}_{int(time.time())}.json"
+    save_pipeline_metrics(metrics_file)
+
+    patterns = get_error_patterns()
+    if patterns['recursion_errors']:
+        logging.warning(f"Detected recursion errors in: {patterns['recursion_errors']}")
+    if patterns['timeout_errors']:
+        logging.warning(f"Detected timeout errors in: {patterns['timeout_errors']}")
+
+    logging.info("Download process finished.")
+
+
+# Generic step runner to avoid duplicate log lines
+def _run_step(start_msg, runner, cfg, end_msg):
+    logging.info(start_msg)
+    runner(cfg)
+    logging.info(end_msg)
+
+
 def main():
     """Run the ETL pipeline with improved geodatabase management."""
     # Set increased recursion limit to handle deeply nested API responses
@@ -221,6 +256,15 @@ def main():
     from etl.logging_config import setup_logging
     setup_logging(cfg.get("logging"))
 
+    # Suppress noisy urllib3 retry WARNINGs (e.g., connectionpool Retrying ...)
+    for name in (
+        "urllib3",
+        "urllib3.connectionpool",
+        "requests.packages.urllib3",
+        "requests.packages.urllib3.connectionpool",
+    ):
+        logging.getLogger(name).setLevel(logging.ERROR)
+
     # 3) proceed with ETL; all modules just use logging.getLogger(__name__)
     logging.info("Starting ETL process...")
 
@@ -242,62 +286,15 @@ def main():
     do_all = not any((args.download, args.process, args.load_sde))
 
     if args.download or do_all:
-        logging.info("Starting download process...")
-
-        # Apply filters if specified
-        sources = cfg["sources"]
-        if args.authority:
-            sources = [s for s in sources if s.get("authority") == args.authority]
-        if args.type:
-            sources = [s for s in sources if s.get("type") == args.type]
-
-        # Create filtered config
-        filtered_cfg = cfg.copy()
-        filtered_cfg["sources"] = sources
-
-        # Import downloaders
-        from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
-
-        # Run each downloader separately
-        download_http.run(filtered_cfg)
-        download_atom.run(filtered_cfg)
-        download_ogc.run(filtered_cfg)
-        download_wfs.run(filtered_cfg)
-        download_rest.run(filtered_cfg)
-
-        # Stage downloaded files
-        logging.info("Starting staging process...")
-        from etl.stage_files import stage_all_downloads
-        stage_all_downloads(filtered_cfg)
-
-        # Log monitoring summary
-        from etl.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
-        log_pipeline_summary()
-
-        # Save metrics to file
-        metrics_file = Path("logs") / f"pipeline_metrics_{Path().resolve().name}_{int(time.time())}.json"
-        save_pipeline_metrics(metrics_file)
-
-        # Check for error patterns
-        patterns = get_error_patterns()
-        if patterns['recursion_errors']:
-            logging.warning(f"Detected recursion errors in: {patterns['recursion_errors']}")
-        if patterns['timeout_errors']:
-            logging.warning(f"Detected timeout errors in: {patterns['timeout_errors']}")
-
-        logging.info("Download process finished.")
+        _run_download(cfg, args)
 
     if args.process or do_all:
-        logging.info("Starting processing step...")
         from etl import process
-        process.run(cfg)
-        logging.info("Processing step finished.")
+        _run_step("Starting processing step...", process.run, cfg, "Processing step finished.")
 
     if args.load_sde or do_all:
-        logging.info("Starting SDE loading process...")
         from etl import load_sde
-        load_sde.run(cfg)
-        logging.info("SDE loading process finished.")
+        _run_step("Starting SDE loading process...", load_sde.run, cfg, "SDE loading process finished.")
 
     logging.info("ETL process finished successfully.")
 
