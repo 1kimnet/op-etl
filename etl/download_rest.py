@@ -3,11 +3,12 @@ REST API downloader for OP-ETL pipeline.
 Enhanced implementation with recursion depth protection and SR consistency.
 """
 
+import contextlib
 import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
 from .monitoring import end_monitoring_source, start_monitoring_source
@@ -39,7 +40,7 @@ def sanitize_layer_name(name: str) -> str:
     return sanitized[:200] if len(sanitized) > 200 else sanitized or "unknown_layer"
 
 
-def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int]]:
+def _extract_global_bbox(cfg: dict) -> Tuple[Optional[Sequence[float | int]], Optional[int]]:
     """Extract global bbox configuration."""
     if not cfg.get("use_bbox_filter", False):
         return None, None
@@ -56,20 +57,16 @@ def _extract_global_bbox(cfg: dict) -> Tuple[Optional[List[float]], Optional[int
         if crs_upper in ("WGS84", "CRS84"):
             sr = 4326
         elif crs_upper.startswith("EPSG:"):
-            try:
+            with contextlib.suppress(ValueError, IndexError):
                 sr = int(crs_upper.split(":", 1)[1])
-            except (ValueError, IndexError):
-                pass
-
     return coords, sr
 
-
-def coerce_bbox4(bbox: Optional[List[float]]) -> Optional[BBox]:
-    """Convert list to 4-tuple bbox."""
+def coerce_bbox4(bbox: Optional[Sequence[float | int]]) -> Optional[BBox]:
+    """Convert any indexable 4+ sequence of numbers to a 4-tuple bbox of floats."""
     if bbox is None or len(bbox) < 4:
         return None
-
-    return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    x0, y0, x1, y1 = bbox[0], bbox[1], bbox[2], bbox[3]
+    return float(x0), float(y0), float(x1), float(y1)
 
 
 def build_rest_params(cfg: Dict[str, Any], bbox_3006: Optional[BBox] = None) -> Dict[str, Any]:
@@ -108,14 +105,11 @@ def diagnose_rest_response(layer_url: str, raw_config: Dict) -> None:
     session = RecursionSafeSession()
 
     try:
-        # Test total count
-        response = session.safe_get(
+        if response := session.safe_get(
             f"{layer_url}/query",
             params={"where": "1=1", "returnCountOnly": "true", "f": "json"},
-            timeout=30
-        )
-
-        if response:
+            timeout=30,
+        ):
             if data := safe_json_parse(response.content):
                 log.info(f"[REST DEBUG] Total features: {data.get('count', 0)}")
 
@@ -171,7 +165,7 @@ def run(cfg: dict) -> None:
 def process_rest_source(
     source: Dict,
     downloads_dir: Path,
-    global_bbox: Optional[List[float]],
+    global_bbox: Optional[Sequence[float | int]],
     global_sr: Optional[int]
 ) -> Tuple[bool, int]:
     """Process single REST source."""
@@ -183,15 +177,7 @@ def process_rest_source(
     out_dir = downloads_dir / authority / name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Get or discover layers
-    layer_ids = raw.get("layer_ids", [])
-
-    if not layer_ids:
-        layer_info = discover_layers(base_url, raw.get("include"))
-        if not layer_info:
-            log.info(f"[REST] No layers found in {name}")
-            return True, 0
-    else:
+    if layer_ids := raw.get("layer_ids", []):
         all_discovered = discover_layers(base_url)
         discovered_by_id = {layer["id"]: layer for layer in all_discovered}
 
@@ -200,6 +186,11 @@ def process_rest_source(
             for lid in layer_ids
         ]
 
+    else:
+        layer_info = discover_layers(base_url, raw.get("include"))
+        if not layer_info:
+            log.info(f"[REST] No layers found in {name}")
+            return True, 0
     total_features = 0
 
     for layer in layer_info:
@@ -220,50 +211,50 @@ def process_rest_source(
 
 def discover_layers(base_url: str, include: List[str] | None = None) -> List[Dict[str, Any]]:
     """Discover available layers."""
+    import fnmatch
     session = RecursionSafeSession()
 
     try:
-        response = session.safe_get(base_url, params={"f": "json"}, timeout=30)
-
-        if not response or not validate_response_content(response):
-            return []
-
-        if not (data := safe_json_parse(response.content)):
-            return []
-
-        layer_info = []
-        layers = data.get("layers", [])
-
-        if include:
-            import fnmatch
-            patterns = [p.lower() for p in include]
-        else:
-            patterns = None
-
-        for layer in layers:
-            if isinstance(layer, dict) and "id" in layer:
-                layer_id = layer["id"]
-                layer_name = layer.get("name", f"layer_{layer_id}")
-
-                if patterns:
-                    lname = str(layer_name).lower()
-                    if not any(fnmatch.fnmatchcase(lname, p) for p in patterns):
-                        continue
-
-                layer_info.append({"id": layer_id, "name": layer_name})
-
-        # Handle single-layer FeatureServers
-        if not layer_info and data.get("type") == "Feature Layer":
-            layer_id = data.get("id", 0)
-            layer_name = data.get("name", f"layer_{layer_id}")
-            layer_info.append({"id": layer_id, "name": layer_name})
-
-        log.info(f"[REST] Discovered {len(layer_info)} layers")
-        return layer_info
-
+        return _extracted_from_discover_layers_7(session, base_url, include, fnmatch)
     except Exception as e:
         log.warning(f"[REST] Failed to discover layers: {e}")
         return []
+
+
+# TODO Rename this here and in `discover_layers`
+def _extracted_from_discover_layers_7(session, base_url, include, fnmatch):
+    response = session.safe_get(base_url, params={"f": "json"}, timeout=30)
+
+    if not response or not validate_response_content(response):
+        return []
+
+    if not (data := safe_json_parse(response.content)):
+        return []
+
+    layer_info = []
+    layers = data.get("layers", [])
+
+    patterns = [p.lower() for p in include] if include else None
+    for layer in layers:
+        if isinstance(layer, dict) and "id" in layer:
+            layer_id = layer["id"]
+            layer_name = layer.get("name", f"layer_{layer_id}")
+
+            if patterns:
+                lname = str(layer_name).lower()
+                if not any(fnmatch.fnmatchcase(lname, p) for p in patterns):
+                    continue
+
+            layer_info.append({"id": layer_id, "name": layer_name})
+
+    # Handle single-layer FeatureServers
+    if not layer_info and data.get("type") == "Feature Layer":
+        layer_id = data.get("id", 0)
+        layer_name = data.get("name", f"layer_{layer_id}")
+        layer_info.append({"id": layer_id, "name": layer_name})
+
+    log.info(f"[REST] Discovered {len(layer_info)} layers")
+    return layer_info
 
 
 def download_layer(
@@ -271,7 +262,7 @@ def download_layer(
     out_dir: Path,
     layer_name: str,
     raw_config: Dict,
-    global_bbox: Optional[List[float]],
+    global_bbox: Optional[Sequence[float | int]],
     global_sr: Optional[int]
 ) -> int:
     """Download all features from a REST layer."""

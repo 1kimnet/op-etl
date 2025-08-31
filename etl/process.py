@@ -1,5 +1,6 @@
 # Replace etl/process.py with this simplified version:
 
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -50,8 +51,7 @@ def run(cfg):
             if not arcpy.Exists(fc_path):
                 continue
 
-            processed = process_feature_class(fc_path, aoi, target_wkid)
-            if processed:
+            if process_feature_class(fc_path, aoi, target_wkid):
                 processed_count += 1
                 successfully_processed.append(fc_name)
                 logging.info(f"[PROCESS] ✓ {fc_name}")
@@ -120,17 +120,18 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
                     logging.debug(f"[PROCESS] Reprojecting from EPSG:{current_wkid} to EPSG:{target_wkid}")
 
                     # Use appropriate transformation for SWEREF99 TM to SWEREF99 16 30
-                    if current_wkid == 3006 and target_wkid == 3010:
+                    if (
+                        current_wkid == 3006
+                        and target_wkid == 3010
+                        or current_wkid != 4326
+                        or target_wkid != 3010
+                    ):
                         # Direct transformation between SWEREF99 variants
                         arcpy.management.Project(current_fc, temp_proj, target_sr)
-                    elif current_wkid == 4326 and target_wkid == 3010:
+                    else:
                         # WGS84 to SWEREF99 16 30
                         transform = "WGS_1984_To_SWEREF99"
                         arcpy.management.Project(current_fc, temp_proj, target_sr, transform)
-                    else:
-                        # Default transformation
-                        arcpy.management.Project(current_fc, temp_proj, target_sr)
-
                     temp_fcs.append(temp_proj)
                     current_fc = temp_proj
                     needs_processing = True
@@ -159,8 +160,6 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
     finally:
         # Cleanup
         for temp_fc in temp_fcs:
-            try:
+            with contextlib.suppress(Exception):
                 if arcpy.Exists(temp_fc):
                     arcpy.management.Delete(temp_fc)
-            except Exception:
-                pass
