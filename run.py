@@ -250,7 +250,7 @@ def main():
     except ConfigError as e:
         # Use basic logging for config errors since we haven't configured logging yet
         print(f"Config error: {e}", file=sys.stderr)
-        raise SystemExit(f"Config error: {e}")
+        raise SystemExit(f"Config error: {e}") from e
 
     # 2) now configure logging from YAML
     from etl.logging_config import setup_logging
