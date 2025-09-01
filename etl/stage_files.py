@@ -136,10 +136,10 @@ def _stage_geojson_as_points_fallback(json_input_path: Path, out_fc: str, expect
         with open(json_input_path, 'r', encoding='utf-8') as f:
             geojson_data = json.load(f)
         
-        # Write the GeoJSON data to a temporary file with the correct extension
-        temp_geojson_path = os.path.join(tempfile.gettempdir(), "temp_data.geojson")
-        with open(temp_geojson_path, 'w', encoding='utf-8') as f:
-            json.dump(geojson_data, f)
+        # Write the GeoJSON data to a unique temporary file with the correct extension
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.geojson', delete=False) as tmp_file:
+            json.dump(geojson_data, tmp_file)
+            temp_geojson_path = tmp_file.name
         
         # Map GeoJSON geometry types to ArcPy geometry types for JSONToFeatures
         geometry_type_map = {
