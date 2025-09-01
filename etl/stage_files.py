@@ -112,6 +112,75 @@ def _create_feature_class_with_geometry_type(out_fc: str, geometry_type: str, sp
         return False
 
 
+def _stage_geojson_as_points_fallback(json_input_path: Path, out_fc: str, expected_geometry_type: str) -> bool:
+    """
+    Fallback method for staging GeoJSON data with explicit geometry type.
+    
+    This implements the solution from the issue: write GeoJSON to temporary file
+    and use JSONToFeatures with explicit geometry_type parameter.
+    
+    Args:
+        json_input_path: Path to the input GeoJSON file
+        out_fc: The full path for the output feature class
+        expected_geometry_type: The expected GeoJSON geometry type (e.g., "Point")
+    """
+    import arcpy
+    import json
+    import os
+    import tempfile
+    
+    temp_geojson_path = None
+    
+    try:
+        # Read the GeoJSON data
+        with open(json_input_path, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
+        
+        # Write the GeoJSON data to a temporary file with the correct extension
+        temp_geojson_path = os.path.join(tempfile.gettempdir(), "temp_data.geojson")
+        with open(temp_geojson_path, 'w', encoding='utf-8') as f:
+            json.dump(geojson_data, f)
+        
+        # Map GeoJSON geometry types to ArcPy geometry types for JSONToFeatures
+        geometry_type_map = {
+            "Point": "POINT",
+            "MultiPoint": "MULTIPOINT", 
+            "LineString": "POLYLINE",
+            "MultiLineString": "POLYLINE",
+            "Polygon": "POLYGON",
+            "MultiPolygon": "POLYGON"
+        }
+        
+        arcpy_geometry_type = geometry_type_map.get(expected_geometry_type)
+        if not arcpy_geometry_type:
+            logging.error(f"[STAGE] Unknown geometry type for explicit conversion: {expected_geometry_type}")
+            return False
+        
+        # Convert the file to a feature class, forcing the correct geometry type
+        arcpy.conversion.JSONToFeatures(
+            in_json_file=temp_geojson_path,
+            out_features=out_fc,
+            geometry_type=arcpy_geometry_type
+        )
+        
+        logging.info(f"[STAGE] Successfully created {expected_geometry_type} feature class using explicit geometry type: {out_fc}")
+        return True
+        
+    except arcpy.ExecuteError:
+        logging.error(f"[STAGE] ArcPy error in fallback method: {arcpy.GetMessages(2)}")
+        return False
+    except Exception as e:
+        logging.error(f"[STAGE] Fallback method failed: {e}")
+        return False
+    finally:
+        # Clean up the temporary file
+        if temp_geojson_path and os.path.exists(temp_geojson_path):
+            try:
+                os.remove(temp_geojson_path)
+            except Exception as e:
+                logging.debug(f"[STAGE] Failed to clean up temporary file {temp_geojson_path}: {e}")
+
+
 def _import_geojson_robust(json_input_path: Path, out_fc: str, expected_geometry_type: str, spatial_reference) -> bool:
     """Import GeoJSON with robust geometry type handling."""
     try:
@@ -139,25 +208,8 @@ def _import_geojson_robust(json_input_path: Path, out_fc: str, expected_geometry
         except Exception as e:
             logging.warning(f"[STAGE] Standard JSONToFeatures failed: {e}")
         
-        # Fallback: Create feature class with correct geometry type, then load data
-        if not _create_feature_class_with_geometry_type(out_fc, expected_geometry_type, spatial_reference):
-            return False
-            
-        # Load the JSON data using alternative method
-        try:
-            # For now, we'll have to fall back to the original method and accept the mismatch
-            # In a real implementation, we could parse JSON and insert features manually
-            # or use ogr2ogr or other tools to handle the conversion
-            logging.warning(f"[STAGE] Fallback geometry handling not fully implemented")
-            logging.warning(f"[STAGE] Feature class created with correct {expected_geometry_type} type but data import requires manual handling")
-            
-            # Try JSONToFeatures again now that we have the right geometry type
-            arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
-            return True
-            
-        except Exception as e:
-            logging.error(f"[STAGE] Fallback import method failed: {e}")
-            return False
+        # Fallback: Use explicit geometry type with temporary file approach
+        return _stage_geojson_as_points_fallback(json_input_path, out_fc, expected_geometry_type)
             
     except Exception as e:
         logging.error(f"[STAGE] Robust GeoJSON import failed: {e}")
