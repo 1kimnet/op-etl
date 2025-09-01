@@ -1,8 +1,11 @@
-from pathlib import Path
 import os
+from pathlib import Path
+
 import yaml
 
 from .download_http import slug
+
+
 class ConfigError(Exception):
     pass
 
@@ -42,7 +45,7 @@ def load_config(
     else:
         defaults = {}
         sources = src if isinstance(src, list) else []
-        
+
     if not isinstance(sources, list):
         raise ConfigError(
             "sources.yaml must contain a top-level 'sources' list or dict with 'sources' key."
@@ -102,14 +105,27 @@ def load_config(
 def _apply_bbox_inheritance(source: dict, defaults: dict) -> None:
     """Apply bbox inheritance from defaults to source if not already specified."""
     raw = source.setdefault("raw", {})
-    
-    # Inherit bbox if not specified in source
-    if "bbox" not in raw and "bbox" in defaults:
-        raw["bbox"] = defaults["bbox"]
-    
-    # Inherit bbox_sr if not specified in source
-    if "bbox_sr" not in raw and "bbox_sr" in defaults:
-        raw["bbox_sr"] = defaults["bbox_sr"]
+
+    # Use protocol-appropriate defaults. Never leak REST bbox (3006) into OGC.
+    src_type = (source.get("type") or "").lower()
+
+    if src_type == "ogc":
+        # Prefer OGC-specific defaults if available
+        if "bbox" not in raw and "ogc_bbox" in defaults:
+            raw["bbox"] = defaults["ogc_bbox"]
+
+        # Support both bbox_sr (int or string) and bbox_crs (string) patterns
+        if "bbox_sr" not in raw and "ogc_bbox_sr" in defaults:
+            raw["bbox_sr"] = defaults["ogc_bbox_sr"]
+        # Don't override an explicitly provided bbox_crs
+        if "bbox_crs" not in raw and isinstance(defaults.get("ogc_bbox_sr"), str):
+            raw["bbox_crs"] = defaults["ogc_bbox_sr"]
+    else:
+        # REST/other sources inherit meter-based bbox by default
+        if "bbox" not in raw and "bbox" in defaults:
+            raw["bbox"] = defaults["bbox"]
+        if "bbox_sr" not in raw and "bbox_sr" in defaults:
+            raw["bbox_sr"] = defaults["bbox_sr"]
 
 
 def normalize_sources(cfg: dict) -> list[dict]:

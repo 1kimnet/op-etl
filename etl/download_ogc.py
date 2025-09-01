@@ -15,7 +15,6 @@ from .monitoring import end_monitoring_source, start_monitoring_source
 from .sr_utils import (
     SWEREF99_TM,
     WGS84_DD,
-    get_sr_config_for_source,
     log_sr_validation_summary,
     validate_sr_consistency,
 )
@@ -86,7 +85,7 @@ def run(cfg: dict) -> None:
     downloads_dir = Path(cfg["workspaces"]["downloads"])
 
     for source in ogc_sources:
-        metric = start_monitoring_source(source['name'], source['authority'], 'ogc')
+        start_monitoring_source(source['name'], source['authority'], 'ogc')
 
         try:
             log.info(f"[OGC] Processing {source['name']}")
@@ -225,9 +224,7 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     page_size = int(raw.get("page_size", 1000) or 1000)
     params = {}
 
-    # Get SR configuration for source (OGC-specific handling)
-    source_info = {"type": "ogc", "raw": raw}
-    sr_config = get_sr_config_for_source(source_info)
+    # Get SR configuration for source (OGC-specific handling) - handled inline per request
 
     # Check if server supports EPSG:3006 - define early to ensure it's always bound
     supports_3006 = raw.get("supports_epsg_3006", False)
@@ -246,12 +243,13 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
     if bbox and len(bbox) >= 4:
         params["bbox"] = ",".join(str(v) for v in bbox[:4])
         if supports_3006:
+            # Explicitly request SWEREF99 TM when server supports it
             params["bbox-crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
             params["crs"] = f"http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
             log.info(f"[OGC] Using EPSG:{SWEREF99_TM} for {collection_id}")
         else:
-            params["bbox-crs"] = "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
-            log.info(f"[OGC] Using CRS84 for {collection_id} (EPSG:3006 not supported)")
+            # Do NOT send bbox-crs for CRS84; most servers assume CRS84 by default
+            log.info(f"[OGC] Using default CRS84 for {collection_id}")
 
     validation_results = {}
     total = 0
@@ -304,7 +302,7 @@ def fetch_collection_items(base_url: str, collection_id: str, out_dir: Path, raw
             next_url = next_link
             next_params = None
 
-            # Ensure CRS params are maintained across pagination
+            # Ensure CRS params are maintained across pagination (only when explicitly set)
             if next_url and supports_3006:
                 if "?" in next_url:
                     next_url += f"&crs=http://www.opengis.net/def/crs/EPSG/0/{SWEREF99_TM}"
