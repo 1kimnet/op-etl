@@ -56,7 +56,13 @@ def run(cfg):
                 successfully_processed.append(fc_name)
                 logging.info(f"[PROCESS] ✓ {fc_name}")
             else:
-                logging.info(f"[PROCESS] - {fc_name} (no processing needed)")
+                # If no processing but non-empty, still mark as processed so it loads
+                count = int(str(arcpy.management.GetCount(fc_path)[0]))
+                if count > 0:
+                    successfully_processed.append(fc_name)
+                    logging.info(f"[PROCESS] - {fc_name} (no processing needed, {count} features)")
+                else:
+                    logging.info(f"[PROCESS] - {fc_name} (empty)")
 
         except Exception as e:
             logging.error(f"[PROCESS] ✗ {fc_name}: {e}")
