@@ -29,6 +29,34 @@ def _flatten_coordinates(coords):
     return flat
 
 
+def _dominant_geometry_type(features: list) -> str | None:
+    """Return the most frequent GeoJSON geometry type among features."""
+    counts = {}
+    for f in features or []:
+        try:
+            g = f.get("geometry") or {}
+            gt = g.get("type")
+            if isinstance(gt, str):
+                counts[gt] = counts.get(gt, 0) + 1
+        except Exception:
+            continue
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
+def _filter_features_by_geometry_type(features: list, geom_type: str) -> list:
+    """Filter GeoJSON features by exact geometry type."""
+    out = []
+    for f in features or []:
+        try:
+            if (f.get("geometry") or {}).get("type") == geom_type:
+                out.append(f)
+        except Exception:
+            continue
+    return out
+
+
 def stage_all_downloads(cfg: dict) -> None:
     """
     Main staging function - discovers and imports all downloaded files.
@@ -63,7 +91,7 @@ def stage_all_downloads(cfg: dict) -> None:
         # Import each file
         for file_path in files_found:
             safe_name = create_safe_name(file_path, authority_name)
-            if success := import_file_to_staging(
+            if import_file_to_staging(
                 file_path, gdb_path, safe_name
             ):
                 imported_count += 1
@@ -313,8 +341,27 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                     logging.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path.name}")
                     return False
 
+        # If mixed geometry types, keep only dominant type to avoid FC type mismatch
+        dominant = _dominant_geometry_type(features)
+        json_input_path = geojson_path
+        temp_path = None
+        if dominant and any(((f.get("geometry") or {}).get("type") != dominant) for f in features):
+            filtered = _filter_features_by_geometry_type(features, dominant)
+            if not filtered:
+                logging.warning(f"[STAGE] No features of dominant geometry '{dominant}' in {geojson_path.name}")
+                return False
+            temp_path = geojson_path.with_suffix(".filtered.geojson")
+            try:
+                temp_data = {"type": "FeatureCollection", "features": filtered}
+                import json as _json
+                temp_path.write_text(_json.dumps(temp_data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                json_input_path = temp_path
+                logging.info(f"[STAGE] Filtered to geometry '{dominant}' for {geojson_path.name}")
+            except Exception as e:
+                logging.warning(f"[STAGE] Failed to write filtered GeoJSON: {e}")
+
         # Import via JSONToFeatures
-        arcpy.conversion.JSONToFeatures(str(geojson_path), out_fc)
+        arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
 
         # Ensure the output FC has a proper SR definition
         _ensure_fc_spatial_reference(out_fc, detected_sr)
@@ -330,6 +377,18 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
             except Exception as e:
                 logging.warning(f"[STAGE] Projection failed for {geojson_path.name}: {e}")
                 # Keep original if projection fails
+
+        # Log feature count after import
+        try:
+            count = int(str(arcpy.management.GetCount(out_fc)[0]))
+            logging.info(f"[STAGE] {geojson_path.name} -> {Path(out_fc).name}: {count} features")
+        except Exception as e:
+            logging.debug(f"[STAGE] Could not read feature count for {out_fc}: {e}")
+
+        # Cleanup temp filtered file
+        if temp_path and temp_path.exists():
+            with contextlib.suppress(Exception):
+                temp_path.unlink()
 
         return True
     except Exception as e:
@@ -348,6 +407,13 @@ def import_esri_json(json_path: Path, out_fc: str) -> bool:
         desc = arcpy.Describe(out_fc)
         if desc.spatialReference.name == "Unknown":
             logging.warning(f"[STAGE] SR is Unknown after importing Esri JSON: {json_path.name}. Check the file's 'spatialReference' object.")
+
+        # Log feature count after import
+        try:
+            count = int(str(arcpy.management.GetCount(out_fc)[0]))
+            logging.info(f"[STAGE] {json_path.name} -> {Path(out_fc).name}: {count} features")
+        except Exception as e:
+            logging.debug(f"[STAGE] Could not read feature count for {out_fc}: {e}")
 
         return True
     except Exception as e:

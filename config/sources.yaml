@@ -17,7 +17,7 @@ sources:
 - name: Försvarsmakten - Rikstäckande geodata
   authority: FM
   type: file
-  url: 
+  url:
     https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
   enabled: false
 
@@ -78,7 +78,7 @@ sources:
 - name: Potentiellt förorenade områden
   authority: LST
   type: file
-  url: 
+  url:
     https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
   enabled: false
 - name: Riksintressen
@@ -131,7 +131,7 @@ sources:
 - name: LstD Ett rikt odlingslandskap
   authority: LSTD
   type: rest
-  url: 
+  url:
     https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
   enabled: false
   raw:
@@ -184,7 +184,7 @@ sources:
 - name: LstD Levande sjöar och vattendrag
   authority: LSTD
   type: rest
-  url: 
+  url:
     https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
   enabled: false
   raw:
@@ -406,15 +406,9 @@ sources:
   enabled: true
   raw:
     collections:
-    - brunnar
     - brunnar-lager
     page_size: 1000
     supports_bbox_crs: true
-    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
-    supports_epsg_3006: false
-    bbox_crs: CRS84
-    stage_sr: 4326
-    target_sr: 3006
 - name: Jordskred och raviner
   authority: SGU
   type: ogc
