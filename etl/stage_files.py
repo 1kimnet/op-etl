@@ -57,6 +57,25 @@ def _filter_features_by_geometry_type(features: list, geom_type: str) -> list:
     return out
 
 
+def _geojson_to_arcgis_geometry_type(geojson_type: str) -> str:
+    """Map GeoJSON geometry type to expected ArcGIS shapeType."""
+    mapping = {
+        "Point": "Point",
+        "MultiPoint": "Multipoint",
+        "LineString": "Polyline",
+        "MultiLineString": "Polyline", 
+        "Polygon": "Polygon",
+        "MultiPolygon": "Polygon"
+    }
+    return mapping.get(geojson_type, "Unknown")
+
+
+def _validate_geometry_type_match(geojson_type: str, arcgis_shape_type: str) -> bool:
+    """Validate that ArcGIS shape type matches expected type from GeoJSON geometry."""
+    expected = _geojson_to_arcgis_geometry_type(geojson_type)
+    return expected.lower() == arcgis_shape_type.lower()
+
+
 def stage_all_downloads(cfg: dict) -> None:
     """
     Main staging function - discovers and imports all downloaded files.
@@ -407,8 +426,20 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
             shape_type = getattr(desc, 'shapeType', 'Unknown')
             logging.info(f"[STAGE] {geojson_path.name} -> {Path(out_fc).name}: {count} features (ArcGIS type: {shape_type})")
             
+            # Validate geometry type matches expectation
+            if dominant and not _validate_geometry_type_match(dominant, shape_type):
+                expected_type = _geojson_to_arcgis_geometry_type(dominant)
+                logging.error(f"[STAGE] Geometry type mismatch in {geojson_path.name}: expected {expected_type}, got {shape_type}")
+                logging.error(f"[STAGE] This indicates ArcPy JSONToFeatures created wrong geometry type for {dominant} features")
+                # Delete the incorrectly created feature class
+                with contextlib.suppress(Exception):
+                    arcpy.management.Delete(out_fc)
+                return False
+            
             if count == 0:
                 logging.warning(f"[STAGE] Empty feature class created for {geojson_path.name} - potential geometry type mismatch")
+                if dominant:
+                    logging.warning(f"[STAGE] Expected {dominant} geometries but got {count} features in {shape_type} feature class")
         except Exception as e:
             logging.debug(f"[STAGE] Could not read feature count for {out_fc}: {e}")
 
