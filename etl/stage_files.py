@@ -341,24 +341,46 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                     logging.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path.name}")
                     return False
 
-        # If mixed geometry types, keep only dominant type to avoid FC type mismatch
+        # Enhanced geometry check and filtering for all GeoJSON (especially OGC sources)
         dominant = _dominant_geometry_type(features)
         json_input_path = geojson_path
         temp_path = None
-        if dominant and any(((f.get("geometry") or {}).get("type") != dominant) for f in features):
-            filtered = _filter_features_by_geometry_type(features, dominant)
-            if not filtered:
-                logging.warning(f"[STAGE] No features of dominant geometry '{dominant}' in {geojson_path.name}")
-                return False
-            temp_path = geojson_path.with_suffix(".filtered.geojson")
-            try:
-                temp_data = {"type": "FeatureCollection", "features": filtered}
-                import json as _json
-                temp_path.write_text(_json.dumps(temp_data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-                json_input_path = temp_path
-                logging.info(f"[STAGE] Filtered to geometry '{dominant}' for {geojson_path.name}")
-            except Exception as e:
-                logging.warning(f"[STAGE] Failed to write filtered GeoJSON: {e}")
+        
+        # Log geometry type distribution for better debugging
+        if features:
+            geom_counts = {}
+            for f in features:
+                geom_type = (f.get("geometry") or {}).get("type")
+                if geom_type:
+                    geom_counts[geom_type] = geom_counts.get(geom_type, 0) + 1
+            logging.info(f"[STAGE] {geojson_path.name} geometry types: {geom_counts}")
+        
+        if dominant:
+            logging.info(f"[STAGE] Dominant geometry type for {geojson_path.name}: {dominant}")
+            
+            # Check if we have mixed geometry types that need filtering
+            mixed_types = any(((f.get("geometry") or {}).get("type") != dominant) for f in features)
+            
+            if mixed_types:
+                logging.info(f"[STAGE] Mixed geometry types detected in {geojson_path.name}, filtering to {dominant}")
+                filtered = _filter_features_by_geometry_type(features, dominant)
+                if not filtered:
+                    logging.warning(f"[STAGE] No features of dominant geometry '{dominant}' in {geojson_path.name}")
+                    return False
+                    
+                temp_path = geojson_path.with_suffix(".filtered.geojson")
+                try:
+                    temp_data = {"type": "FeatureCollection", "features": filtered}
+                    import json as _json
+                    temp_path.write_text(_json.dumps(temp_data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                    json_input_path = temp_path
+                    logging.info(f"[STAGE] Filtered {len(features)} -> {len(filtered)} features (keeping '{dominant}') for {geojson_path.name}")
+                except Exception as e:
+                    logging.warning(f"[STAGE] Failed to write filtered GeoJSON: {e}")
+            else:
+                logging.info(f"[STAGE] All {len(features)} features are '{dominant}' type in {geojson_path.name}")
+        else:
+            logging.warning(f"[STAGE] No dominant geometry type detected in {geojson_path.name}")
 
         # Import via JSONToFeatures
         arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
@@ -378,10 +400,15 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                 logging.warning(f"[STAGE] Projection failed for {geojson_path.name}: {e}")
                 # Keep original if projection fails
 
-        # Log feature count after import
+        # Log feature count and geometry type after import
         try:
             count = int(str(arcpy.management.GetCount(out_fc)[0]))
-            logging.info(f"[STAGE] {geojson_path.name} -> {Path(out_fc).name}: {count} features")
+            desc = arcpy.Describe(out_fc)
+            shape_type = getattr(desc, 'shapeType', 'Unknown')
+            logging.info(f"[STAGE] {geojson_path.name} -> {Path(out_fc).name}: {count} features (ArcGIS type: {shape_type})")
+            
+            if count == 0:
+                logging.warning(f"[STAGE] Empty feature class created for {geojson_path.name} - potential geometry type mismatch")
         except Exception as e:
             logging.debug(f"[STAGE] Could not read feature count for {out_fc}: {e}")
 

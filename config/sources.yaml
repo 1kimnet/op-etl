@@ -409,6 +409,11 @@ sources:
     - brunnar-lager
     page_size: 1000
     supports_bbox_crs: true
+    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
+    supports_epsg_3006: false
+    bbox_crs: CRS84
+    stage_sr: 4326
+    target_sr: 3006
 - name: Jordskred och raviner
   authority: SGU
   type: ogc
@@ -419,6 +424,11 @@ sources:
     - jordskred-raviner
     page_size: 1000
     supports_bbox_crs: true
+    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
+    supports_epsg_3006: false
+    bbox_crs: CRS84
+    stage_sr: 4326
+    target_sr: 3006
 - name: Grus Krossberg
   authority: SGU
   type: ogc
@@ -431,6 +441,11 @@ sources:
     - grus-moran
     page_size: 1000
     supports_bbox_crs: true
+    # SR configuration for OGC API - defaults to CRS84, stage in WGS84, target SWEREF99 TM
+    supports_epsg_3006: false
+    bbox_crs: CRS84
+    stage_sr: 4326
+    target_sr: 3006
 
 #-------------------------------------------------#
 #                SJV - Jordbruksverket            #
