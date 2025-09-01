@@ -15,8 +15,10 @@ Design:
 Config knobs can be provided via the HttpClient(cfg=...) dict.
 """
 
+
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -189,7 +191,7 @@ class HttpClient:
             "Accept-Encoding": "gzip, deflate"
         }
         if headers:
-            self._default_headers.update(headers)
+            self._default_headers |= headers
 
     def _build_url(self, url: str, params: Optional[Dict[str, Any]]) -> str:
         if not params:
@@ -202,7 +204,7 @@ class HttpClient:
         if not headers:
             return dict(self._default_headers)
         out = dict(self._default_headers)
-        out.update(headers)
+        out |= headers
         return out
 
     def _resolve_redirect_flag(self, allow_redirects: Optional[bool]) -> bool:
@@ -229,42 +231,45 @@ class HttpClient:
             log.info("GET %s", full_url)
             r = self._http.request("GET", full_url, headers=hdrs, redirect=follow, preload_content=False)
             try:
-                status = int(r.status or 0)
-
-                if not follow and 300 <= status < 400:
-                    loc = r.headers.get("Location")
-                    log.error("Redirect blocked: %s -> %s", full_url, loc)
-                    r.release_conn()
-                    return None
-
-                content = r.read()
-                r.release_conn()
-
-                if _bytes_too_large(content, max_response_mb):
-                    log.warning("Response too large: %s bytes (> %s MB)", len(content), max_response_mb)
-                    return None
-
-                headers_out = {str(k).lower(): str(v) for k, v in r.headers.items()}
-                headers_out["content-length"] = str(len(content))
-
-                return SimpleResponse(
-                    status_code=status or 200,
-                    headers=headers_out,
-                    content=content,
-                    url=getattr(r, "geturl", lambda: full_url)()
-                )
+                return self._extracted_from_get_18(r, follow, full_url, max_response_mb)
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
-
         except urllib3.exceptions.MaxRetryError as e:
             log.error("HTTP retries exhausted for %s: %s", url, e)
             return None
         except Exception as e:
             log.error("HTTP error for %s: %s", url, e)
             return None
+
+    # TODO Rename this here and in `get`
+    def _extracted_from_get_18(self, r, follow, full_url, max_response_mb):
+        status = self.new_method(r)
+
+        if not follow and 300 <= status < 400:
+            return self._extracted_from_download_file_5(
+                r, "Redirect blocked: %s -> %s", full_url, None
+            )
+        content = r.read()
+        r.release_conn()
+
+        if _bytes_too_large(content, max_response_mb):
+            log.warning("Response too large: %s bytes (> %s MB)", len(content), max_response_mb)
+            return None
+
+        headers_out = {str(k).lower(): str(v) for k, v in r.headers.items()}
+        headers_out["content-length"] = str(len(content))
+
+        return SimpleResponse(
+            status_code=status or 200,
+            headers=headers_out,
+            content=content,
+            url=getattr(r, "geturl", lambda: full_url)()
+        )
+
+    def new_method(self, r):
+        status = int(r.status or 0)
+        return status
 
     def get_json(
         self,
@@ -276,10 +281,16 @@ class HttpClient:
         max_response_mb: int = MAX_RESPONSE_SIZE_MB,
         max_json_depth: int = MAX_JSON_DEPTH
     ) -> Optional[Dict[str, Any]]:
-        resp = self.get(url, params=params, headers=headers, allow_redirects=allow_redirects, max_response_mb=max_response_mb)
-        if not resp:
+        if resp := self.get(
+            url,
+            params=params,
+            headers=headers,
+            allow_redirects=allow_redirects,
+            max_response_mb=max_response_mb,
+        ):
+            return safe_json_parse(resp.content, max_depth=max_json_depth)
+        else:
             return None
-        return safe_json_parse(resp.content, max_depth=max_json_depth)
 
     def get_xml(
         self,
@@ -291,10 +302,16 @@ class HttpClient:
         max_response_mb: int = MAX_RESPONSE_SIZE_MB,
         max_elements: int = 10000
     ) -> Optional[ET.Element]:
-        resp = self.get(url, params=params, headers=headers, allow_redirects=allow_redirects, max_response_mb=max_response_mb)
-        if not resp:
+        if resp := self.get(
+            url,
+            params=params,
+            headers=headers,
+            allow_redirects=allow_redirects,
+            max_response_mb=max_response_mb,
+        ):
+            return safe_xml_parse(resp.content, max_elements=max_elements)
+        else:
             return None
-        return safe_xml_parse(resp.content, max_elements=max_elements)
 
     def download_file(
         self,
@@ -306,7 +323,7 @@ class HttpClient:
         allow_redirects: Optional[bool] = None,
         max_download_mb: int = MAX_DOWNLOAD_SIZE_MB,
         chunk_size: int = 1 << 15  # 32 KiB
-    ) -> bool:
+    ) -> bool:  # sourcery skip: use-contextlib-suppress
         try:
             full_url = self._build_url(url, params)
             hdrs = self._merge_headers(headers)
@@ -318,21 +335,16 @@ class HttpClient:
                 status = int(r.status or 0)
 
                 if not follow and 300 <= status < 400:
-                    loc = r.headers.get("Location")
-                    log.error("Redirect blocked (download): %s -> %s", full_url, loc)
-                    r.release_conn()
-                    return False
-
+                    return self._extracted_from_download_file_5(
+                        r, "Redirect blocked (download): %s -> %s", full_url, False
+                    )
                 # size hint by header
-                try:
+                with contextlib.suppress(Exception):
                     length_header = r.headers.get("Content-Length")
                     if length_header and int(length_header) > max_download_mb * 1024 * 1024:
                         log.warning("File too large by header: %s bytes", length_header)
                         r.release_conn()
                         return False
-                except Exception:
-                    pass
-
                 output_path.parent.mkdir(parents=True, exist_ok=True)
 
                 total = 0
@@ -347,10 +359,8 @@ class HttpClient:
                             try:
                                 f.close()
                             finally:
-                                try:
+                                with contextlib.suppress(Exception):
                                     output_path.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
                             r.release_conn()
                             return False
                         f.write(chunk)
@@ -377,8 +387,12 @@ class HttpClient:
             log.error("Download error for %s: %s", url, e)
             return False
 
-# --------------------------------------------------------------------------------------
-# Safe parsers (module-level)
+    # TODO Rename this here and in `_extracted_from_get_18` and `download_file`
+    def _extracted_from_download_file_5(self, r, arg1, full_url, arg3):
+        loc = r.headers.get("Location")
+        log.error(arg1, full_url, loc)
+        r.release_conn()
+        return arg3
 # --------------------------------------------------------------------------------------
 
 def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int = MAX_JSON_DEPTH) -> Optional[Dict[str, Any]]:
@@ -429,32 +443,36 @@ def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int
 def safe_xml_parse(content: BytesLike, *, max_elements: int = 10_000, max_size_mb: int = MAX_RESPONSE_SIZE_MB) -> Optional[ET.Element]:
     """Safely parse XML with element count and size limits."""
     try:
-        raw = _normalize_bytes(content)
-        if raw is None:
-            log.warning("[XML] Content is None")
-            return None
-
-        if _bytes_too_large(raw, max_size_mb):
-            log.warning("[XML] Content too large: %s bytes", len(raw))
-            return None
-
-        if raw.count(b"<!ENTITY") > 0:
-            log.warning("[XML] Potentially dangerous XML with ENTITY declarations")
-            return None
-
-        if raw.count(b"<") > max_elements:
-            log.warning("[XML] Too many elements: > %s", max_elements)
-            return None
-
-        parser = ET.XMLParser(encoding="utf-8")
-        return ET.fromstring(raw, parser=parser)
-
+        return _extracted_from_safe_xml_parse_4(content, max_size_mb, max_elements)
     except ET.ParseError as e:
         log.error("[XML] Parse error: %s", e)
         return None
     except Exception as e:
         log.error("[XML] Unexpected error: %s", e)
         return None
+
+
+# TODO Rename this here and in `safe_xml_parse`
+def _extracted_from_safe_xml_parse_4(content, max_size_mb, max_elements):
+    raw = _normalize_bytes(content)
+    if raw is None:
+        log.warning("[XML] Content is None")
+        return None
+
+    if _bytes_too_large(raw, max_size_mb):
+        log.warning("[XML] Content too large: %s bytes", len(raw))
+        return None
+
+    if raw.count(b"<!ENTITY") > 0:
+        log.warning("[XML] Potentially dangerous XML with ENTITY declarations")
+        return None
+
+    if raw.count(b"<") > max_elements:
+        log.warning("[XML] Too many elements: > %s", max_elements)
+        return None
+
+    parser = ET.XMLParser(encoding="utf-8")
+    return ET.fromstring(raw, parser=parser)
 
 def validate_response_content(response: SimpleResponse) -> bool:
     """Basic response validation for SimpleResponse (kept for backward-compat)."""
@@ -525,8 +543,7 @@ def download_with_retries(
     for attempt in range(1, max_retries + 1):
         try:
             log.info("[DOWNLOAD] Attempt %s/%s: %s", attempt, max_retries, url)
-            ok = client.download_file(url, output_path)
-            if ok:
+            if client.download_file(url, output_path):
                 return True
             raise RuntimeError("download failed")
         except Exception as e:
@@ -569,8 +586,7 @@ def http_download(url: str, output_path: Path, **kwargs) -> bool:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     s = RecursionSafeSession()
-    r = s.safe_get("https://httpbin.org/get", params={"q": "gis"})
-    if r:
+    if r := s.safe_get("https://httpbin.org/get", params={"q": "gis"}):
         log.info("Status: %s, bytes: %s", r.status_code, len(r.content))
         data = r.json()
         log.info("Keys: %s", list(data.keys()) if data else "none")

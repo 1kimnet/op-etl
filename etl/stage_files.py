@@ -40,9 +40,7 @@ def _dominant_geometry_type(features: list) -> str | None:
                 counts[gt] = counts.get(gt, 0) + 1
         except Exception:
             continue
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda kv: kv[1])[0]
+    return None if not counts else max(counts.items(), key=lambda kv: kv[1])[0]
 
 
 def _filter_features_by_geometry_type(features: list, geom_type: str) -> list:
@@ -63,7 +61,7 @@ def _geojson_to_arcgis_geometry_type(geojson_type: str) -> str:
         "Point": "Point",
         "MultiPoint": "Multipoint",
         "LineString": "Polyline",
-        "MultiLineString": "Polyline", 
+        "MultiLineString": "Polyline",
         "Polygon": "Polygon",
         "MultiPolygon": "Polygon"
     }
@@ -80,85 +78,138 @@ def _create_feature_class_with_geometry_type(out_fc: str, geometry_type: str, sp
     """Create an empty feature class with specified geometry type."""
     try:
         import arcpy
-        
+
         # Map GeoJSON geometry types to ArcPy geometry types
         arcpy_geom_map = {
             "Point": "POINT",
-            "MultiPoint": "MULTIPOINT", 
+            "MultiPoint": "MULTIPOINT",
             "LineString": "POLYLINE",
             "MultiLineString": "POLYLINE",
             "Polygon": "POLYGON",
             "MultiPolygon": "POLYGON"
         }
-        
+
         arcpy_geom_type = arcpy_geom_map.get(geometry_type)
         if not arcpy_geom_type:
             logging.warning(f"[STAGE] Unknown geometry type for feature class creation: {geometry_type}")
             return False
-            
+
         # Create feature class with explicit geometry type
         arcpy.management.CreateFeatureclass(
-            out_workspace=str(Path(out_fc).parent),
-            out_name=str(Path(out_fc).name),
+            str(Path(out_fc).parent),
+            str(Path(out_fc).name),
             geometry_type=arcpy_geom_type,
             spatial_reference=spatial_reference
         )
-        
+
         logging.info(f"[STAGE] Created feature class with explicit {arcpy_geom_type} geometry type")
         return True
-        
+
     except Exception as e:
         logging.warning(f"[STAGE] Failed to create feature class with explicit geometry type: {e}")
         return False
+
+
+def _stage_geojson_as_points_fallback(json_input_path: Path, out_fc: str, expected_geometry_type: str) -> bool:
+    """
+    Fallback method for staging GeoJSON data with explicit geometry type.
+
+    This implements the solution from the issue: write GeoJSON to temporary file
+    and use JSONToFeatures with explicit geometry_type parameter.
+
+    Args:
+        json_input_path: Path to the input GeoJSON file
+        out_fc: The full path for the output feature class
+        expected_geometry_type: The expected GeoJSON geometry type (e.g., "Point")
+    """
+    import json
+    import os
+    import tempfile
+
+    import arcpy
+
+    temp_geojson_path = None
+
+    try:
+        # Read the GeoJSON data
+        with open(json_input_path, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
+
+        # Write the GeoJSON data to a unique temporary file with the correct extension
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.geojson', delete=False) as tmp_file:
+            json.dump(geojson_data, tmp_file)
+            temp_geojson_path = tmp_file.name
+
+        # Map GeoJSON geometry types to ArcPy geometry types for JSONToFeatures
+        geometry_type_map = {
+            "Point": "POINT",
+            "MultiPoint": "MULTIPOINT",
+            "LineString": "POLYLINE",
+            "MultiLineString": "POLYLINE",
+            "Polygon": "POLYGON",
+            "MultiPolygon": "POLYGON"
+        }
+
+        arcpy_geometry_type = geometry_type_map.get(expected_geometry_type)
+        if not arcpy_geometry_type:
+            logging.error(f"[STAGE] Unknown geometry type for explicit conversion: {expected_geometry_type}")
+            return False
+
+        # Convert the file to a feature class, forcing the correct geometry type
+        arcpy.conversion.JSONToFeatures(
+            in_json_file=temp_geojson_path,
+            out_features=out_fc,
+            geometry_type=arcpy_geometry_type
+        )
+
+        logging.info(f"[STAGE] Successfully created {expected_geometry_type} feature class using explicit geometry type: {out_fc}")
+        return True
+
+    except arcpy.ExecuteError:
+        logging.error(f"[STAGE] ArcPy error in fallback method: {arcpy.GetMessages(2)}")
+        return False
+    except Exception as e:
+        logging.error(f"[STAGE] Fallback method failed: {e}")
+        return False
+    finally:
+        # Clean up the temporary file
+        if temp_geojson_path and os.path.exists(temp_geojson_path):
+            try:
+                os.remove(temp_geojson_path)
+            except Exception as e:
+                logging.debug(f"[STAGE] Failed to clean up temporary file {temp_geojson_path}: {e}")
 
 
 def _import_geojson_robust(json_input_path: Path, out_fc: str, expected_geometry_type: str, spatial_reference) -> bool:
     """Import GeoJSON with robust geometry type handling."""
     try:
         import arcpy
-        
+
         # Try standard JSONToFeatures first
         try:
             arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
-            
+
             # Check if geometry type matches expectation
             desc = arcpy.Describe(out_fc)
             actual_shape_type = getattr(desc, 'shapeType', 'Unknown')
-            
+
             if _validate_geometry_type_match(expected_geometry_type, actual_shape_type):
                 logging.debug(f"[STAGE] Standard JSONToFeatures created correct geometry type: {actual_shape_type}")
                 return True
             else:
                 logging.warning(f"[STAGE] JSONToFeatures created {actual_shape_type}, expected {_geojson_to_arcgis_geometry_type(expected_geometry_type)}")
                 logging.info(f"[STAGE] Trying fallback method for {expected_geometry_type} geometry")
-                
+
                 # Delete incorrect feature class
                 with contextlib.suppress(Exception):
                     arcpy.management.Delete(out_fc)
-                
+
         except Exception as e:
             logging.warning(f"[STAGE] Standard JSONToFeatures failed: {e}")
-        
-        # Fallback: Create feature class with correct geometry type, then load data
-        if not _create_feature_class_with_geometry_type(out_fc, expected_geometry_type, spatial_reference):
-            return False
-            
-        # Load the JSON data using alternative method
-        try:
-            # For now, we'll have to fall back to the original method and accept the mismatch
-            # In a real implementation, we could parse JSON and insert features manually
-            # or use ogr2ogr or other tools to handle the conversion
-            logging.warning(f"[STAGE] Fallback geometry handling not fully implemented")
-            logging.warning(f"[STAGE] Feature class created with correct {expected_geometry_type} type but data import requires manual handling")
-            
-            # Try JSONToFeatures again now that we have the right geometry type
-            arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
-            return True
-            
-        except Exception as e:
-            logging.error(f"[STAGE] Fallback import method failed: {e}")
-            return False
-            
+
+        # Fallback: Use explicit geometry type with temporary file approach
+        return _stage_geojson_as_points_fallback(json_input_path, out_fc, expected_geometry_type)
+
     except Exception as e:
         logging.error(f"[STAGE] Robust GeoJSON import failed: {e}")
         return False
@@ -452,29 +503,28 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
         dominant = _dominant_geometry_type(features)
         json_input_path = geojson_path
         temp_path = None
-        
+
         # Log geometry type distribution for better debugging
         if features:
             geom_counts = {}
             for f in features:
-                geom_type = (f.get("geometry") or {}).get("type")
-                if geom_type:
+                if geom_type := (f.get("geometry") or {}).get("type"):
                     geom_counts[geom_type] = geom_counts.get(geom_type, 0) + 1
             logging.info(f"[STAGE] {geojson_path.name} geometry types: {geom_counts}")
-        
+
         if dominant:
             logging.info(f"[STAGE] Dominant geometry type for {geojson_path.name}: {dominant}")
-            
+
             # Check if we have mixed geometry types that need filtering
             mixed_types = any(((f.get("geometry") or {}).get("type") != dominant) for f in features)
-            
+
             if mixed_types:
                 logging.info(f"[STAGE] Mixed geometry types detected in {geojson_path.name}, filtering to {dominant}")
                 filtered = _filter_features_by_geometry_type(features, dominant)
                 if not filtered:
                     logging.warning(f"[STAGE] No features of dominant geometry '{dominant}' in {geojson_path.name}")
                     return False
-                    
+
                 temp_path = geojson_path.with_suffix(".filtered.geojson")
                 try:
                     temp_data = {"type": "FeatureCollection", "features": filtered}
@@ -497,7 +547,7 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                 return False
         else:
             # Fall back to standard import if no dominant geometry detected
-            logging.warning(f"[STAGE] No dominant geometry detected, using standard JSONToFeatures")
+            logging.warning("[STAGE] No dominant geometry detected, using standard JSONToFeatures")
             arcpy.conversion.JSONToFeatures(str(json_input_path), out_fc)
 
         # Ensure the output FC has a proper SR definition
@@ -521,7 +571,7 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
             desc = arcpy.Describe(out_fc)
             shape_type = getattr(desc, 'shapeType', 'Unknown')
             logging.info(f"[STAGE] {geojson_path.name} -> {Path(out_fc).name}: {count} features (ArcGIS type: {shape_type})")
-            
+
             # Validate geometry type matches expectation
             if dominant and not _validate_geometry_type_match(dominant, shape_type):
                 expected_type = _geojson_to_arcgis_geometry_type(dominant)
@@ -531,7 +581,7 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                 with contextlib.suppress(Exception):
                     arcpy.management.Delete(out_fc)
                 return False
-            
+
             if count == 0:
                 logging.warning(f"[STAGE] Empty feature class created for {geojson_path.name} - potential geometry type mismatch")
                 if dominant:
