@@ -141,8 +141,9 @@ class BaselineCapture:
                 fcs = arcpy.ListFeatureClasses()
                 for fc in fcs or []:
                     try:
-                        arcpy.management.Delete(fc)
                         logger.debug(f"Deleted existing FC: {fc}")
+                    except arcpy.ExecuteError as ex:
+                        logger.debug(f"ArcPy ExecuteError deleting {fc}: {arcpy.GetMessages(2)}")
                     except Exception as e:
                         logger.debug(f"Could not delete {fc}: {e}")
                 arcpy.env.workspace = None
