@@ -207,8 +207,10 @@ class BaselineCapture:
             ]
             
             for fc in fcs:
+                fc_lower = fc.lower()
                 for candidate in candidates:
-                    if candidate.lower() in fc.lower() or fc.lower() in candidate.lower():
+                    candidate_lower = candidate.lower()
+                    if candidate_lower in fc_lower or fc_lower in candidate_lower:
                         logger.debug(f"Found staged FC: {fc} for source {source_name}")
                         return fc
 
