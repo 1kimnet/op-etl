@@ -12,8 +12,8 @@ Key principles:
 """
 
 import logging
-from typing import Dict, List, Optional, Literal, Union, Any
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Literal, Any
+from dataclasses import dataclass
 from pathlib import Path
 import yaml
 
