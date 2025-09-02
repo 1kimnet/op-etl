@@ -21,7 +21,7 @@ This is the **only** configuration file currently used by the system.
 The current configuration system uses a single, explicit configuration file that includes:
 
 - Workspace settings
-- Processing parameters  
+- Processing parameters
 - Complete source definitions with explicit geometry types (eliminates auto-detection)
 - Comprehensive validation with clear error messages
 
