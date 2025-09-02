@@ -2,14 +2,19 @@
 
 This directory contains the configuration files for the OP-ETL pipeline.
 
-## Current Structure
+## 🟢 Active Configuration
 
-**Active Configuration:**
-- `config.yaml` - **Unified configuration** (single file format) containing all pipeline settings and source definitions
+**Currently Used:**
+- `config.yaml` - **ACTIVE** unified configuration file (single file format)
 
-**Legacy Files (backup/reference):**
+This is the **only** configuration file currently used by the system.
+
+## 📁 Legacy Files (backup/reference)
+
 - `legacy/config.yaml` - Original global pipeline settings (191 lines)
 - `legacy/sources.yaml` - Original source definitions (644 lines)
+
+**Cleanup Schedule:** Legacy files will be removed on **2024-04-01** once migration is fully validated.
 
 ## Configuration Format
 
