@@ -96,21 +96,18 @@ if __name__ == "__main__":
     
     # Test with file logging
     print("\nTesting with file logging:")
-    with tempfile.NamedTemporaryFile(suffix='.log', delete=False) as f:
-        log_file = Path(f.name)
-    
-    setup_pipeline_logging(console_level="INFO", file_path=log_file)
-    
-    log_phase_start("Test Phase")
-    log_source_result("test_source", True, 1234)
-    log_source_result("failed_source", False, 0, "Network error")
-    log_phase_complete("Test Phase", 2, 1)
-    
-    # Show file contents
-    print(f"\nLog file contents ({log_file}):")
-    with log_file.open('r') as f:
-        print(f.read())
-    
-    # Cleanup
-    log_file.unlink()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log_file = Path(tmpdir) / "pipeline.log"
+        
+        setup_pipeline_logging(console_level="INFO", file_path=log_file)
+        
+        log_phase_start("Test Phase")
+        log_source_result("test_source", True, 1234)
+        log_source_result("failed_source", False, 0, "Network error")
+        log_phase_complete("Test Phase", 2, 1)
+        
+        # Show file contents
+        print(f"\nLog file contents ({log_file}):")
+        with log_file.open('r') as f:
+            print(f.read())
     print("✅ Logging test complete")
