@@ -69,11 +69,13 @@ class SourceConfig:
     collections: Optional[List[str]] = None  # OGC/WFS
     layer_ids: Optional[List[int]] = None    # REST
 
+    # Source types that require geometry specification
+    REQUIRES_GEOMETRY = {"ogc", "wfs"}
+
     def __post_init__(self) -> None:
         """Validate source configuration based on type."""
         # Geometry required for sources that return GeoJSON
-        geojson_types = {"ogc", "wfs"}
-        if self.type in geojson_types and not self.geometry:
+        if self.type in self.REQUIRES_GEOMETRY and not self.geometry:
             raise ValueError(f"geometry field required for {self.type} sources")
 
         # Collections required for OGC/WFS
