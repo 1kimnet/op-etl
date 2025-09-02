@@ -584,7 +584,9 @@ def http_download(url: str, output_path: Path, **kwargs) -> bool:
 # --------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    # Use the new logging system instead of basicConfig
+    from .logging import setup_pipeline_logging
+    setup_pipeline_logging(console_level="INFO")
     s = RecursionSafeSession()
     if r := s.safe_get("https://httpbin.org/get", params={"q": "gis"}):
         log.info("Status: %s, bytes: %s", r.status_code, len(r.content))
