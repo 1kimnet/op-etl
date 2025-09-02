@@ -28,10 +28,16 @@ def run(cfg):
         logging.warning(f"[LOAD] Failed to load processed feature classes list ({type(e).__name__}): {e} - will load all feature classes")
 
     # List actual feature classes in staging using arcpy.da.Walk
-    feature_classes = []
+    # Collect tuples of (full_path, relative_path, name)
+    feature_classes: list[tuple[str, str, str]] = []
     try:
         for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
-            feature_classes.extend(filenames)
+            for name in filenames:
+                fc_path = f"{dirpath}/{name}"
+                rel_dir = dirpath[len(staging_gdb):] if str(dirpath).startswith(str(staging_gdb)) else ""
+                rel_dir = str(rel_dir).strip("/\\")
+                rel_path = f"{rel_dir}/{name}" if rel_dir else name
+                feature_classes.append((fc_path, rel_path, name))
     except Exception as e:
         logging.error(f"[LOAD] Cannot access staging GDB: {e}")
         return
@@ -41,10 +47,11 @@ def run(cfg):
         return
 
     # Filter feature classes to only include successfully processed ones
-    if successfully_processed:
+    # Gate on file existence so filtering always applies when the list is present
+    if processed_file.exists():
         original_count = len(feature_classes)
-        excluded_feature_classes = [fc for fc in feature_classes if fc not in successfully_processed]
-        feature_classes = [fc for fc in feature_classes if fc in successfully_processed]
+        excluded_feature_classes = [name for (_full, rel, name) in feature_classes if rel not in successfully_processed]
+        feature_classes = [(full, rel, name) for (full, rel, name) in feature_classes if rel in successfully_processed]
         excluded_count = original_count - len(feature_classes)
         if excluded_count > 0:
             logging.info(f"[LOAD] Excluding {excluded_count} feature classes that were not successfully processed (no regional data)")
@@ -53,8 +60,7 @@ def run(cfg):
 
     loaded_count = 0
 
-    for fc_name in feature_classes:
-        src_fc = f"{staging_gdb}/{fc_name}"
+    for src_fc, rel_fc, fc_name in feature_classes:
 
         # Determine target feature dataset by authority prefix (before first underscore)
         authority = fc_name.split('_', 1)[0].upper() if '_' in fc_name else None

@@ -25,6 +25,7 @@ def run(cfg):
         aoi = None  # Disable clipping if AOI doesn't exist
 
     # List actual feature classes in staging using arcpy.da.Walk
+    # Collect tuples of (full_path, relative_path, name)
     feature_classes = []
     try:
         if not arcpy.Exists(staging_gdb):
@@ -32,7 +33,13 @@ def run(cfg):
             return
 
         for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
-            feature_classes.extend(filenames)
+            for name in filenames:
+                fc_path = f"{dirpath}/{name}"
+                # Build relative path inside the GDB (dataset/feature or just feature)
+                rel_dir = dirpath[len(staging_gdb):] if str(dirpath).startswith(str(staging_gdb)) else ""
+                rel_dir = str(rel_dir).strip("/\\")
+                rel_path = f"{rel_dir}/{name}" if rel_dir else name
+                feature_classes.append((fc_path, rel_path, name))
     except Exception as e:
         logging.error(f"[PROCESS] Cannot access staging GDB: {e}")
         return
@@ -42,10 +49,9 @@ def run(cfg):
         return
 
     processed_count = 0
-    successfully_processed = []  # Track feature classes that were successfully processed
+    successfully_processed: list[str] = []  # Track relative paths that were successfully processed
 
-    for fc_name in feature_classes:
-        fc_path = f"{staging_gdb}/{fc_name}"
+    for fc_path, rel_fc_path, fc_name in feature_classes:
 
         try:
             if not arcpy.Exists(fc_path):
@@ -53,28 +59,33 @@ def run(cfg):
 
             if process_feature_class(fc_path, aoi, target_wkid):
                 processed_count += 1
-                successfully_processed.append(fc_name)
+                successfully_processed.append(rel_fc_path)
                 logging.info(f"[PROCESS] ✓ {fc_name}")
+            elif aoi:
+                logging.info(f"[PROCESS] ⤬ {fc_name} (no features within AOI – skipped)")
             else:
-                # If no processing but non-empty, still mark as processed so it loads
-                count = int(str(arcpy.management.GetCount(fc_path)[0]))
-                if count > 0:
-                    successfully_processed.append(fc_name)
-                    logging.info(f"[PROCESS] - {fc_name} (no processing needed, {count} features)")
-                else:
-                    logging.info(f"[PROCESS] - {fc_name} (empty)")
+                logging.info(f"[PROCESS] ⤬ {fc_name} (no processing applied – skipped)")
 
         except Exception as e:
             logging.error(f"[PROCESS] ✗ {fc_name}: {e}")
 
-    # Save list of successfully processed feature classes for the loading step
-    try:
-        processed_file = Path(staging_gdb).parent / "processed_feature_classes.json"
-        with open(processed_file, 'w') as f:
-            json.dump(successfully_processed, f, indent=2)
-        logging.info(f"[PROCESS] Saved {len(successfully_processed)} successfully processed feature classes to {processed_file}")
-    except IOError as e:
-        logging.warning(f"[PROCESS] Failed to save processed feature classes list: {e}")
+    # Save list of successfully processed feature classes only when AOI is provided
+    processed_file = Path(staging_gdb).parent / "processed_feature_classes.json"
+    if aoi is not None:
+        try:
+            with open(processed_file, 'w') as f:
+                json.dump(successfully_processed, f, indent=2)
+            logging.info(f"[PROCESS] Saved {len(successfully_processed)} successfully processed feature classes to {processed_file}")
+        except IOError as e:
+            logging.warning(f"[PROCESS] Failed to save processed feature classes list: {e}")
+    else:
+        # AOI disabled: ensure no stale processed file exists
+        try:
+            if processed_file.exists():
+                processed_file.unlink()
+                logging.info("[PROCESS] AOI disabled; removed existing processed feature classes list")
+        except Exception as e:
+            logging.debug(f"[PROCESS] Could not remove processed list: {e}")
 
     logging.info(f"[PROCESS] Processed {processed_count} feature classes")
 
@@ -111,7 +122,9 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
                         arcpy.management.Delete(temp_clip)
                     return False
             except Exception as e:
-                logging.warning(f"[PROCESS] Clipping failed: {e}")
+                # If clipping fails while AOI is provided, stop further processing to avoid un-clipped data
+                logging.error(f"[PROCESS] Clipping failed: {e}")
+                return False
 
         # Project to SWEREF99 16 30 (EPSG:3010) if needed
         if target_wkid:
@@ -125,19 +138,14 @@ def process_feature_class(fc_path: str, aoi_fc: Optional[str] = None, target_wki
 
                     logging.debug(f"[PROCESS] Reprojecting from EPSG:{current_wkid} to EPSG:{target_wkid}")
 
-                    # Use appropriate transformation for SWEREF99 TM to SWEREF99 16 30
-                    if (
-                        current_wkid == 3006
-                        and target_wkid == 3010
-                        or current_wkid != 4326
-                        or target_wkid != 3010
-                    ):
-                        # Direct transformation between SWEREF99 variants
-                        arcpy.management.Project(current_fc, temp_proj, target_sr)
-                    else:
-                        # WGS84 to SWEREF99 16 30
+                    # Simplified reprojection rule:
+                    # If WGS84 (EPSG:4326) to SWEREF99 16 30 (EPSG:3010), use explicit transformation.
+                    # Otherwise, rely on ArcPy defaults.
+                    if current_wkid == 4326 and target_wkid == 3010:
                         transform = "WGS_1984_To_SWEREF99"
                         arcpy.management.Project(current_fc, temp_proj, target_sr, transform)
+                    else:
+                        arcpy.management.Project(current_fc, temp_proj, target_sr)
                     temp_fcs.append(temp_proj)
                     current_fc = temp_proj
                     needs_processing = True
