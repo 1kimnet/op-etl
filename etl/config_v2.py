@@ -157,7 +157,7 @@ class PipelineConfig:
         for source in enabled_sources:
             by_type[source.type] = by_type.get(source.type, 0) + 1
 
-        logger.info(f"📋 Configuration loaded: {len(enabled_sources)} enabled sources")
+        logger.info(f"[CONFIG] Configuration loaded: {len(enabled_sources)} enabled sources")
         for source_type, count in by_type.items():
             logger.info(f"   {source_type}: {count} sources")
 
