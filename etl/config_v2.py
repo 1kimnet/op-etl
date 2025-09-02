@@ -234,7 +234,7 @@ def create_example_config() -> Dict[str, Any]:
 def migrate_old_config(old_config_path: Path, old_sources_path: Path,
                       output_path: Path) -> PipelineConfig:
     """Migrate existing legacy configuration files to new unified format."""
-    logger.info(f"🔄 Migrating configuration from {old_config_path} + {old_sources_path}")
+    logger.info(f"[MIGRATING] Migrating configuration from {old_config_path} + {old_sources_path}")
 
     # Load old configuration files
     with old_config_path.open('r') as f:
