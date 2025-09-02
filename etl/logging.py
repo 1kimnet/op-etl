@@ -35,7 +35,7 @@ def setup_pipeline_logging(
 
     # Console handler with clean format
     console_handler = std_logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(std_logging, console_level.upper()))
+    console_handler.setLevel(console_level.upper())
     console_format = std_logging.Formatter(
         '%(asctime)s | %(levelname)-8s | %(message)s',
         datefmt='%H:%M:%S'
