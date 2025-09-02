@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SourceBaseline:
     """Comprehensive baseline metrics for a single source."""
-    name: str
-    source_type: str
-    authority: str
-    success: bool
-    feature_count: int
-    geometry_type: str
-    srid: int
-    file_size_bytes: int
-    processing_time_seconds: float
+    name: str = ""
+    source_type: str = ""
+    authority: str = ""
+    success: bool = False
+    feature_count: int = 0
+    geometry_type: str = ""
+    srid: int = 0
+    file_size_bytes: int = 0
+    processing_time_seconds: float = 0.0
     download_path: Optional[str] = None
     staging_fc_name: Optional[str] = None
     error_message: Optional[str] = None
