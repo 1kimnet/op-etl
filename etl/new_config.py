@@ -75,8 +75,7 @@ class SourceConfig:
     def __post_init__(self) -> None:
         """Validate source configuration based on type."""
         # Geometry required for sources that return GeoJSON
-        if self.type in self.REQUIRES_GEOMETRY and not self.geometry:
-            raise ValueError(f"geometry field required for {self.type} sources")
+            raise ValueError(f"geometry field required for {self.type} sources. Valid values: {', '.join(GeometryType.__args__)}")
 
         # Collections required for OGC/WFS
         if self.type in {"ogc", "wfs"} and not self.collections:
