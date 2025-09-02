@@ -1,3 +1,12 @@
+# OP-ETL New Configuration Format
+# Single unified configuration file (replaces config.yaml + sources.yaml)
+# This file contains the migrated configuration from the old split format
+
+workspace:
+  downloads: "./data/downloads"
+  staging_gdb: "./data/staging.gdb"
+  sde_connection: "./data/connections/prod.sde"
+
 processing:
   aoi_bbox:
   - 610000
