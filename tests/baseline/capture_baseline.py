@@ -155,27 +155,25 @@ class BaselineCapture:
         filtered_config = config.copy()
         filtered_config['sources'] = [source]
 
-        # Import and run appropriate downloader
+        # Registry mapping source types to downloader modules
+        downloader_registry = {
+            'rest': ('etl.download_rest', 'run'),
+            'ogc': ('etl.download_ogc', 'run'),
+            'http': ('etl.download_http', 'run'),
+            'file': ('etl.download_http', 'run'),
+            'wfs': ('etl.download_wfs', 'run'),
+            'atom': ('etl.download_atom', 'run'),
+        }
+
         source_type = source['type']
-        
-        if source_type == 'rest':
-            from etl import download_rest
-            download_rest.run(filtered_config)
-        elif source_type == 'ogc':
-            from etl import download_ogc  
-            download_ogc.run(filtered_config)
-        elif source_type == 'http' or source_type == 'file':
-            from etl import download_http
-            download_http.run(filtered_config)
-        elif source_type == 'wfs':
-            from etl import download_wfs
-            download_wfs.run(filtered_config)
-        elif source_type == 'atom':
-            from etl import download_atom
-            download_atom.run(filtered_config)
-        else:
+        if source_type not in downloader_registry:
             raise ValueError(f"Unknown source type: {source_type}")
 
+        module_path, func_name = downloader_registry[source_type]
+        import importlib
+        downloader_module = importlib.import_module(module_path)
+        run_func = getattr(downloader_module, func_name)
+        run_func(filtered_config)
         # Run staging
         from etl.stage_files import stage_all_downloads
         stage_all_downloads(filtered_config)
