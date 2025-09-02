@@ -369,7 +369,4 @@ sources:
   name: "\xD6vrigt"
   type: rest
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer
-workspace:
-  downloads: ./data/downloads
-  sde_connection: ./data/connections/prod.sde
-  staging_gdb: ./data/staging/staging.gdb
+# (Removed duplicated workspace block)
