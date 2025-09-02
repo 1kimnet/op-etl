@@ -99,9 +99,9 @@ class SourceConfig:
         self.name = self._sanitize_name(self.name)
         self.authority = self._sanitize_name(self.authority)
 
-    def _sanitize_name(self, name: str) -> str:
+    @staticmethod
+    def _sanitize_name(name: str) -> str:
         """Sanitize name for filesystem and database compatibility."""
-        import re
         # Replace non-alphanumeric with underscores
         sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
         # Remove multiple underscores
