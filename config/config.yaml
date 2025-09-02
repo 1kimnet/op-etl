@@ -1,192 +1,375 @@
-# ETL Pipeline Global Configuration
-# This is the main configuration file for the ETL pipeline
-workspaces:
-  downloads: ./data/downloads
-  staging_gdb: ./data/staging/staging.gdb
-  sde_conn: ./data/connections/prod.sde
+# OP-ETL New Configuration Format
+# Single unified configuration file (replaces config.yaml + sources.yaml)
+# This file contains the migrated configuration from the old split format
 
-geoprocess:
-  enabled: true
-  aoi_boundary: "./data/connections/municipality_boundary.shp"  # Strängnäs municipality
-  target_srid: 3010  # SWEREF99 16 30 for production SDE
-  target_wkid: 3010  # Alternative key name for compatibility
+workspace:
+  downloads: "./data/downloads"
+  staging_gdb: "./data/staging.gdb"
+  sde_connection: "./data/connections/prod.sde"
 
-# Environment settings (can be overridden by ETL_ENVIRONMENT variable)
-environment: "development"  # Options: development, staging, production
-debug: false
-
-# Cleanup settings for scheduled runs
-cleanup_downloads_before_run: true   # Clean download folder before each run (recommended for scheduled runs)
-cleanup_staging_before_run: true     # Clean staging folder before each run (recommended for scheduled runs)
-
-# Logging configuration
-logging:
-  level: "WARNING"          # Root level: DEBUG|INFO|WARNING|ERROR|CRITICAL
-  console_level: "INFO"  # Console override; defaults to level if omitted
-  format: "%(asctime)s - %(levelname)s - [%(name)s] %(message)s"
-
-  # File outputs are optional. If set, logs/ is ensured.
-  summary_file: "logs/etl.log"         # Rotates if max_file_size_mb > 0
-  debug_file: "logs/etl.debug.log"     # Always DEBUG level
-
-  max_file_size_mb: 20                 # 0 for no rotation
-  backup_count: 5
-
-# Retry and resilience configuration
-retry:
-  max_attempts: 3
-  base_delay: 1.0
-  backoff_factor: 2.0
-  max_delay: 300.0
-  timeout: 30
-  circuit_breaker_threshold: 5
-  circuit_breaker_timeout: 60.0
-
-# Data processing configuration
 processing:
-  chunk_size: 1000
-  parallel_workers: 2
-  memory_limit_mb: 1024
-  enable_caching: true
-  cache_ttl_hours: 24
-
-# Performance and parallel processing settings
-performance:
-  # Enable parallel SDE loading (processes multiple feature classes simultaneously)
-  parallel_sde_loading: true
-
-  # Number of workers for parallel operations
-  parallel_workers: 2
-
-  # HTTP connection pooling settings
-  connection_pool:
-    pool_connections: 10
-    pool_maxsize: 20
-    max_retries: 3
-    backoff_factor: 0.3
-
-  # Response caching settings
-  response_cache:
-    max_size: 1000
-    default_ttl: 3600  # 1 hour
-    max_response_size_mb: 10
-
-  # Memory management settings
-  memory_management:
-    memory_limit_mb: 1024
-    chunk_size_mb: 50
-    enable_chunked_processing: true
-
-# Monitoring and metrics configuration
-monitoring:
-  # Enable structured JSON logging
-  structured_logging: true
-
-  # Metrics collection settings
-  metrics:
-    enabled: true
-    max_points: 10000
-    retention_hours: 168  # 1 week
-
-  # Health monitoring settings
-  health_checks:
-    enabled: true
-    check_interval_seconds: 300  # 5 minutes
-    memory_threshold_percent: 90
-    disk_threshold_percent: 95
-
-# Data validation configuration
-validation:
-  strict_mode: false
-  schema_validation: true
-  geometry_validation: true
-  attribute_validation: true
-  coordinate_system_validation: true
-  max_validation_errors: 100
-
-# Security configuration
-security:
-  enable_ssl_verification: true
-  trusted_hosts: []
-  max_file_size_mb: 1024
-  allowed_file_types:
-    - ".zip"
-    - ".gpkg"
-    - ".shp"
-    - ".geojson"
-    - ".json"
-    - ".gdb"
-
-# Database configuration
-database:
-  connection_string: null
-  pool_size: 5
-  max_overflow: 10
-  pool_timeout: 30
-  echo_sql: false
-
-# Legacy compatibility settings
-use_bbox_filter: true  # Set to true to enable BBOX filtering for REST APIs
-continue_on_failure: true
-
-# Strängnäs area BBOX coordinates (with buffer)
-# For REST APIs: use SWEREF99 TM coordinates (EPSG:3006)
-global_bbox:
-  coords: [585826, 6550189, 648593, 6611661]  # SWEREF99 TM (meters)
-  crs: 3006
-
-# For OGC APIs: use WGS84/CRS84 coordinates (lon/lat)
-global_ogc_bbox:
-  coords: [16.5211268, 59.0775218, 17.6100933, 59.6217721]  # CRS84 (degrees)
-  crs: "CRS84"
-
-ogc_api_delay: 0.1  # Seconds between requests (default: 0.1)
-
-# Spatial Reference Configuration
-spatial_reference:
-  # Enforce SR consistency throughout pipeline
-  enforce_consistency: true
-
-  # Default SRs for different source types
-  rest_api:
-    bbox_sr: 3006    # Filter bbox in SWEREF99 TM
-    in_sr: 3006      # Input SR for geometry parameter
-    out_sr: 3006     # Output SR for response (download in 3006)
-    stage_sr: 3006   # Stage in SWEREF99 TM
-    target_sr: 3010  # Final SR for SDE (SWEREF99 16 30)
-
-  ogc_api:
-    bbox_crs: "CRS84"          # Default to CRS84 for bbox
-    prefer_crs: "EPSG:3006"    # Prefer EPSG:3006 if supported
-    stage_sr: 4326             # Stage in WGS84 if using CRS84
-    target_sr: 3010            # Project to SWEREF99 16 30 for SDE
-
-  file_sources:
-    stage_sr: 3006             # Stage in SWEREF99 TM
-    target_sr: 3010            # Project to SWEREF99 16 30 for SDE
-
-  validation:
-    magnitude_check: true      # Validate coordinate magnitudes
-    envelope_check: true       # Validate response envelope vs bbox
-    sr_presence_check: true    # Ensure no "Unknown" SR
-
-# SDE loading settings
-sde_connection_file: "./data/connections/prod.sde"
-sde_schema: "GNG"  # Schema prefix for datasets
-sde_dataset_pattern: "Underlag_{authority}"  # Pattern for dataset names
-sde_load_strategy: "truncate_and_load"  # Options: "truncate_and_load", "replace", "append"
-
-# Geoprocessing settings
-geoprocessing:
+  aoi_bbox:
+  - 610000
+  - 6550000
+  - 700000
+  - 6650000
+  aoi_bbox_wkid: 3006
+  target_wkid: 3010
+sources:
+- authority: FM
   enabled: true
-  aoi_boundary: "./data/connections/municipality_boundary.shp"
-  target_srid: 3010  # SWEREF99 16 30
-  parallel_processing_factor: "80%"
-  cleanup_intermediate: true  # Remove processed GDBs after SDE load
-
-# Handle potential duplicates in existing datasets
-sde_duplicate_handling: "warn_and_proceed"  # Options: "warn_and_proceed", "fail_on_duplicates", "ignore"
-
-# Authority to dataset mapping (overrides pattern for special cases)
-sde_authority_mapping:
-  LSTD: "GNG.Underlag_LstD"  # Special case: LSTD → LstD
+  name: "F\xF6rsvarsmakten - Rikst\xE4ckande geodata"
+  type: file
+  url: https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
+- authority: NVV
+  enabled: true
+  name: "Naturv\xE5rdsverket - Naturv\xE5rdsregistret"
+  type: file
+  url: https://geodata.naturvardsverket.se/nedladdning/naturvardsregistret/
+- authority: LST
+  enabled: true
+  name: "Milj\xF6riskomr\xE5de"
+  type: atom
+  url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.LST_Miljoriskomrade.xml
+- authority: LST
+  enabled: true
+  name: 'Vindkraftskollen: Vindkraftverk'
+  type: atom
+  url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_vindkraftverk.xml
+- authority: LST
+  enabled: true
+  name: "Vindkraftskollen: Projekteringsomr\xE5den"
+  type: atom
+  url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_projekteringsomraden.xml
+- authority: LST
+  enabled: true
+  name: "Potentiellt f\xF6rorenade omr\xE5den"
+  type: file
+  url: https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
+- authority: LST
+  enabled: true
+  layer_ids:
+  - 0
+  name: Riksintressen
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_4/MapServer
+- authority: LST
+  enabled: true
+  layer_ids: []
+  name: Riksintressen - Vindbruk
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/LST/lst_lst_riksintressen_vindbruk_4/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: "LstD F\xF6reskrifter"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Foreskrifter_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: LstD Fysisk planering
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Fysisk_planering_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  name: LstD Ett rikt odlingslandskap
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Ett_rikt_odlingslandskap_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  name: LstD Friluftsliv
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Friluftsliv_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: "LstD God bebyggd milj\xF6"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_God_bebyggd_miljo_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: LstD Hav i balans
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Hav_i_balans_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 2
+  - 3
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  name: "LstD Levande sj\xF6ar och vattendrag"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 0
+  name: LstD Levande skogar
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_skogar_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  name: LstD Klimat
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Klimat_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 1
+  name: "LstD Kulturmilj\xF6"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Kulturmiljo_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  name: LstD Markavvattning
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markavvattning_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: LstD Markstabilitet
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Markstabilitet_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: "LstD Naturkartl\xE4ggning"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Naturkartlaggning_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: "LstD Skog och tr\xE4d"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Skog_och_trad_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: "LstD GI V\xE4rdetrakter v\xE5tmark"
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Myllrande_vatmarker_EXT/MapServer
+- authority: LSTD
+  enabled: true
+  layer_ids: []
+  name: LstD Strandskydd
+  type: rest
+  url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Strandskydd_EXT/MapServer
+- authority: MSB
+  enabled: true
+  name: Skyddsrum
+  type: file
+  url: https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip
+- authority: RAA
+  enabled: true
+  name: "Riksintresse Kulturmilj\xF6v\xE5rd MB3kap6"
+  type: atom
+  url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_raa.RAA_RI_kulturmiljovard_MB3kap6.xml
+- authority: RAA
+  enabled: true
+  name: RAA Byggnader Sverige
+  type: file
+  url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnader_kulthist_inv/byggnader_sverige.gpkg
+- authority: RAA
+  enabled: true
+  name: "Enskilda och statliga byggnadsminnen, skyddsomr\xE5den"
+  type: file
+  url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnadsminne_skyddsomr/skyddsomrade_byggnadsminne_sverige.gpkg
+- authority: RAA
+  enabled: true
+  name: "Kulturhistoriska l\xE4mningar, S\xF6dermanland"
+  type: file
+  url: https://pub.raa.se/nedladdning/datauttag/lamningar/lan/l%C3%A4mningar_l%C3%A4n_s%C3%B6dermanland.gpkg
+- authority: RAA
+  enabled: true
+  name: "RAA V\xE4rldsarv i Sverige"
+  type: file
+  url: https://pub.raa.se/nedladdning/datauttag/varldsarv/varldsarv_sverige.gpkg
+- authority: SGI
+  enabled: true
+  name: "Intr\xE4ffade skred, ras och \xF6vriga jordr\xF6relser (skreddatabas)"
+  type: file
+  url: https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip
+- authority: SGU
+  collections:
+  - aktiv-erosion
+  - erosionsforhallande-plus1m
+  - erosionsforhallande-strand
+  - erosionsskydd
+  - oversvamningsskydd
+  - vattenyta-prognos
+  enabled: true
+  geometry: POLYGON
+  name: Erosion
+  type: ogc
+  url: https://api.sgu.se/oppnadata/stranderosion-kust/ogc/features/v1/collections/
+- authority: SGU
+  collections:
+  - brunnar-lager
+  enabled: true
+  geometry: POLYGON
+  name: Brunnar
+  type: ogc
+  url: https://api.sgu.se/oppnadata/brunnar/ogc/features/v1/collections/
+- authority: SGU
+  collections:
+  - jordskred-raviner
+  enabled: true
+  geometry: POLYGON
+  name: Jordskred och raviner
+  type: ogc
+  url: https://api.sgu.se/oppnadata/jordskred-raviner/ogc/features/v1/collections/
+- authority: SGU
+  collections:
+  - grus-grus
+  - grus-berg
+  - grus-moran
+  enabled: true
+  geometry: POLYGON
+  name: Grus Krossberg
+  type: ogc
+  url: https://api.sgu.se/oppnadata/grus-krossberg/ogc/features/v1/collections
+- authority: SJV
+  enabled: true
+  layer_ids:
+  - 18
+  name: Jordbruksblock (2024)
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04jbb/MapServer
+- authority: SJV
+  enabled: true
+  layer_ids:
+  - 4
+  - 5
+  name: "\xC4ngs- och betesmarksinventeringen"
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04ovr/MapServer
+- authority: SKS
+  enabled: true
+  name: "Naturv\xE4rden"
+  type: file
+  url: https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip
+- authority: SKS
+  enabled: true
+  layer_ids:
+  - 2
+  - 4
+  - 6
+  - 7
+  name: Ras och skred
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaRasoskred/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: Skogsstyrelsen - Biotopskydd (REST)
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaBiotopskydd/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: "Utf\xF6rda avverkningar"
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaUtfordavverkning/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: "Naturv\xE5rdsavtal"
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNaturvardsavtal/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: "\xC5terv\xE4tningsavtal"
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAtervatningavtal/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: Nyckelbiotoper
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNyckelbiotop/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: Sumpskogar
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSumpskog/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: "Avverkningsanm\xE4lda omr\xE5den"
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAvverkningsanmalan/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: null
+  name: "Gr\xE4ns f\xF6r skogsskyddsbest\xE4mmelser"
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsskyddsbestammelser/MapServer
+- authority: SKS
+  enabled: true
+  layer_ids: []
+  name: Nyckelbiotoper - storskogsbruket
+  type: rest
+  url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsbruknyckelbiotop/MapServer
+- authority: SVK
+  enabled: true
+  name: "Stamn\xE4t"
+  type: file
+  url: https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip
+- authority: TRV
+  enabled: true
+  layer_ids:
+  - 0
+  - 1
+  - 2
+  name: "V\xE4gar"
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak01/MapServer
+- authority: TRV
+  enabled: true
+  layer_ids:
+  - 2
+  name: "\xD6vrigt"
+  type: rest
+  url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer
+workspace:
+  downloads: ./data/downloads
+  sde_connection: ./data/connections/prod.sde
+  staging_gdb: ./data/staging/staging.gdb

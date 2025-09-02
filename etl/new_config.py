@@ -2,7 +2,7 @@
 New Configuration System for OP-ETL v2.0
 
 This module implements a simplified, explicit configuration system that replaces
-the current split config.yaml + sources.yaml with a single, validated configuration.
+the legacy split configuration (legacy/config.yaml + legacy/sources.yaml) with a single, validated configuration.
 
 Key principles:
 - Explicit over implicit (no auto-detection)
@@ -221,7 +221,7 @@ def create_example_config() -> Dict[str, Any]:
 # Migration utilities
 def migrate_old_config(old_config_path: Path, old_sources_path: Path,
                       output_path: Path) -> PipelineConfig:
-    """Migrate existing config.yaml + sources.yaml to new unified format."""
+    """Migrate existing legacy configuration files to new unified format."""
     logger.info(f"🔄 Migrating configuration from {old_config_path} + {old_sources_path}")
 
     # Load old configuration files
