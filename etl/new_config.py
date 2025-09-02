@@ -83,8 +83,17 @@ class SourceConfig:
             logger.warning(f"No collections specified for {self.type} source {self.name}")
 
         # URL validation
-        if not self.url.startswith(("http://", "https://")):
-            raise ValueError(f"Invalid URL for source {self.name}: {self.url}")
+        if self.type == "file":
+            # Accept file:// URLs or valid filesystem paths
+            if not (
+                self.url.startswith("file://")
+                or Path(self.url).is_absolute()
+                or not any(self.url.startswith(proto) for proto in ("http://", "https://"))
+            ):
+                raise ValueError(f"Invalid file source URL or path for source {self.name}: {self.url}")
+        else:
+            if not self.url.startswith(("http://", "https://")):
+                raise ValueError(f"Invalid URL for source {self.name}: {self.url}")
 
         # Name sanitization
         self.name = self._sanitize_name(self.name)
