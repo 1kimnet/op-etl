@@ -1,0 +1,16 @@
+[
+  {
+    "name": "F\u00f6rsvarsmakten - Rikst\u00e4ckande geodata",
+    "source_type": "file",
+    "authority": "FM",
+    "success": false,
+    "feature_count": 0,
+    "geometry_type": "UNKNOWN",
+    "srid": 0,
+    "file_size_bytes": 0,
+    "processing_time_seconds": 6.0405871868133545,
+    "download_path": null,
+    "staging_fc_name": null,
+    "error_message": null
+  }
+]
