@@ -1,4 +1,5 @@
 # OP-ETL Implementation Guide: Tasks & Code Examples
+
 **Complete refactoring guide with task breakdowns and implementation examples**
 
 ## Overview & Success Metrics
@@ -12,9 +13,11 @@
 # Phase 1: Foundation & Planning (Week 1)
 
 ## Task 1.1: Baseline Capture & Documentation
+
 **Duration**: 2 days | **Prerequisites**: None | **Risk**: Medium
 
 ### Task Breakdown
+
 1. **1.1.1**: Create baseline test dataset (4 hours)
 2. **1.1.2**: Execute current pipeline and capture metrics (4 hours)
 3. **1.1.3**: Document current behavior patterns (2 hours)
@@ -257,6 +260,7 @@ if __name__ == "__main__":
 ```
 
 ### Deliverables
+
 - [ ] `tests/baseline/baseline_results.json` - Machine-readable metrics
 - [ ] `tests/baseline/baseline_report.md` - Human-readable summary
 - [ ] Test dataset with 5 representative sources configured
@@ -264,9 +268,11 @@ if __name__ == "__main__":
 ---
 
 ## Task 1.2: Configuration Schema Design
+
 **Duration**: 1 day | **Prerequisites**: Task 1.1 | **Risk**: Low
 
 ### Task Breakdown
+
 1. **1.2.1**: Design minimal configuration schema (3 hours)
 2. **1.2.2**: Implement validation framework (3 hours)
 3. **1.2.3**: Create migration utilities (2 hours)
@@ -588,6 +594,7 @@ sources:
 ```
 
 ### Deliverables
+
 - [ ] `etl/new_config.py` - New configuration system with validation
 - [ ] `config/config_new.yaml` - Example configuration file
 - [ ] `scripts/migrate_config.py` - Migration utility for existing configs
@@ -596,6 +603,7 @@ sources:
 ---
 
 ## Task 1.3: Simple Logging Infrastructure
+
 **Duration**: 1 day | **Prerequisites**: Task 1.2 | **Risk**: Low
 
 ### Implementation: Simplified Logging
@@ -673,6 +681,7 @@ def log_phase_complete(phase_name: str, total_sources: int, successful: int) -> 
 ```
 
 ### Deliverables
+
 - [ ] `etl/simple_logging.py` - Unified logging system
 - [ ] Consistent log format across all modules
 - [ ] Clear success/failure indicators in logs
@@ -682,9 +691,11 @@ def log_phase_complete(phase_name: str, total_sources: int, successful: int) -> 
 # Phase 2: Core Infrastructure (Week 2)
 
 ## Task 2.1: Simple HTTP Client
+
 **Duration**: 2 days | **Prerequisites**: Task 1.3 | **Risk**: Medium
 
 ### Task Breakdown
+
 1. **2.1.1**: Replace complex http_utils.py with simple requests wrapper (6 hours)
 2. **2.1.2**: Create compatibility shims for existing code (2 hours)
 3. **2.1.3**: Test HTTP client with baseline sources (4 hours)
@@ -845,6 +856,7 @@ def validate_response_content(response: Any) -> bool:
 ```
 
 ### Deliverables
+
 - [ ] `etl/simple_http.py` - New HTTP client (100 lines vs 567 current)
 - [ ] `etl/http_compat.py` - Compatibility layer for migration
 - [ ] HTTP client tested with all baseline sources
@@ -853,6 +865,7 @@ def validate_response_content(response: Any) -> bool:
 ---
 
 ## Task 2.2: Pipeline Orchestrator
+
 **Duration**: 2 days | **Prerequisites**: Task 2.1 | **Risk**: High
 
 ### Implementation: Core Orchestrator
@@ -1126,6 +1139,7 @@ class PipelineOrchestrator:
 ```
 
 ### Deliverables
+
 - [ ] `etl/pipeline.py` - Core orchestrator with phase isolation
 - [ ] Support for full pipeline or individual phases
 - [ ] Error isolation prevents single source from killing pipeline
@@ -1136,6 +1150,7 @@ class PipelineOrchestrator:
 # Phase 3: Download Consolidation (Week 3)
 
 ## Task 3.1: Unified Download System
+
 **Duration**: 3 days | **Prerequisites**: Task 2.2 | **Risk**: High
 
 ### Implementation: Consolidated Downloader
@@ -1529,6 +1544,7 @@ class SourceDownloader:
 ```
 
 ### Deliverables
+
 - [ ] `etl/download.py` - Unified downloader (400 lines vs 1,039 current)
 - [ ] All 5 source types supported with shared infrastructure
 - [ ] Common bbox filtering, error handling, and output patterns
@@ -1539,6 +1555,7 @@ class SourceDownloader:
 # Phase 4: Staging Simplification (Week 4)
 
 ## Task 4.1: Explicit Geometry Staging
+
 **Duration**: 3 days | **Prerequisites**: Task 3.1 | **Risk**: Medium
 
 ### Implementation: Simple Staging System
@@ -1907,6 +1924,7 @@ if __name__ == "__main__":
 ```
 
 ### Deliverables
+
 - [ ] `etl/stage.py` - Simple staging system (150 lines vs 654 current)
 - [ ] `scripts/add_geometry_types.py` - Helper for configuration migration
 - [ ] 77% reduction in staging complexity
@@ -1917,6 +1935,7 @@ if __name__ == "__main__":
 # Phase 5: Final Integration & Documentation (Week 5)
 
 ## Task 5.1: Simple SDE Loader
+
 **Duration**: 2 days | **Prerequisites**: Task 4.1 | **Risk**: Low
 
 ### Implementation: SDE Loading System
@@ -2189,6 +2208,7 @@ if __name__ == "__main__":
 ```
 
 ### Deliverables
+
 - [ ] `etl/load.py` - Simple SDE loader (60 lines)
 - [ ] `run.py` - Simplified CLI interface (150 lines vs 242 current)
 - [ ] Complete pipeline integration with error isolation
@@ -2524,7 +2544,9 @@ python run.py --log-level DEBUG --log-file logs/debug.log
 ## Common Issues
 
 ### "Geometry type required for GeoJSON source"
+
 **Solution**: Add explicit `geometry` field to your source configuration:
+
 ```yaml
 sources:
   - name: "my_source"
@@ -2533,7 +2555,9 @@ sources:
 ```
 
 ### "No features found in bbox"
+
 **Solution**: Check your bbox coordinates and WKID:
+
 ```yaml
 processing:
   aoi_bbox: [610000, 6550000, 700000, 6650000]  # Check these coordinates
@@ -2541,7 +2565,9 @@ processing:
 ```
 
 ### "Cannot access service"
+
 **Solution**: Verify URL and network connectivity:
+
 ```bash
 curl "https://your-service-url/collections?f=json"
 ```
@@ -2563,6 +2589,7 @@ curl "https://your-service-url/collections?f=json"
 ---
 
 *OP-ETL v2.0 - Built for consultant simplicity*
+
 ```
 
 ### Migration Guide
@@ -2597,6 +2624,7 @@ sources:
 ```
 
 **NEW (explicit)**:
+
 ```yaml
 # Single config.yaml file
 workspace:
@@ -2619,6 +2647,7 @@ sources:
 ### 2. Required Changes
 
 #### Geometry Types (REQUIRED)
+
 All GeoJSON sources need explicit geometry:
 
 ```yaml
@@ -2630,6 +2659,7 @@ sources:
 ```
 
 #### Spatial Reference (REQUIRED)
+
 Specify target coordinate system:
 
 ```yaml
@@ -2642,12 +2672,14 @@ processing:
 ### 3. Migration Steps
 
 #### Step 1: Backup Current Configuration
+
 ```bash
 cp config/config.yaml config/config.yaml.v1.backup
 cp config/sources.yaml config/sources.yaml.v1.backup
 ```
 
 #### Step 2: Use Migration Script
+
 ```bash
 python scripts/migrate_config.py \
   --old-config config/config.yaml \
@@ -2656,6 +2688,7 @@ python scripts/migrate_config.py \
 ```
 
 #### Step 3: Add Missing Geometry Types
+
 The migration script adds default geometry types, but you should verify:
 
 ```bash
@@ -2669,6 +2702,7 @@ python scripts/add_geometry_types.py \
 ```
 
 #### Step 4: Test New Configuration
+
 ```bash
 # Test with new config
 python run.py --config config/config_new.yaml --phase download
@@ -2681,7 +2715,8 @@ python tests/complete_parity_test.py \
 
 ### 4. Removed Features
 
-#### No Longer Supported:
+#### No Longer Supported
+
 - Complex monitoring and metrics collection
 - Automatic geometry type detection
 - Elaborate retry and backoff strategies
@@ -2689,7 +2724,8 @@ python tests/complete_parity_test.py \
 - Complex spatial reference inference
 - Pattern detection and error categorization
 
-#### Replaced With:
+#### Replaced With
+
 - Simple success/failure logging
 - Explicit geometry type in configuration
 - Basic retry (3 attempts, 2-second delay)
@@ -2699,7 +2735,8 @@ python tests/complete_parity_test.py \
 
 ### 5. Configuration Reference
 
-#### Complete Example:
+#### Complete Example
+
 ```yaml
 workspace:
   downloads: "./data/downloads"
@@ -2756,13 +2793,17 @@ sources:
 ### 6. Troubleshooting Migration
 
 #### "Geometry type required"
+
 Add explicit geometry to your source:
+
 ```yaml
 geometry: "POLYGON"  # or POINT, POLYLINE, MULTIPOINT
 ```
 
 #### "Invalid EPSG code"
+
 Verify your coordinate system codes:
+
 ```yaml
 processing:
   target_wkid: 3006      # Must be valid EPSG code
@@ -2770,7 +2811,9 @@ processing:
 ```
 
 #### "Feature count mismatch"
+
 The new system may handle edge cases differently. Check:
+
 - Bbox coordinates are in correct coordinate system
 - Geometry filtering is working as expected
 - Network connectivity to data sources
@@ -2800,6 +2843,7 @@ python run.py
 ---
 
 *Need help with migration? Check logs in `./logs/` for detailed error messages.*
+
 ```
 
 ## Final Deliverables Summary
@@ -2808,6 +2852,7 @@ python run.py
 
 **New Codebase Structure (1,000 lines total)**:
 ```
+
 etl/
 ├── pipeline.py          # 200 lines - Main orchestrator
 ├── download.py          # 300 lines - All downloaders unified
@@ -2831,6 +2876,7 @@ scripts/
 
 run.py                         # 150 lines - Simplified CLI
 README.md                      # 5-minute quick start guide
+
 ```
 
 **Migration Package**:
