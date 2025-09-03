@@ -33,7 +33,12 @@ class WorkspaceConfig:
     sde_connection: Path
 
     def __post_init__(self) -> None:
-        """Validate workspace paths on initialization."""
+        """
+        Ensure workspace path attributes are converted to absolute pathlib.Path objects.
+        
+        Converts the `downloads`, `staging_gdb`, and `sde_connection` attributes to
+        pathlib.Path instances and resolves them to absolute paths in-place.
+        """
         self.downloads = Path(self.downloads).resolve()
         self.staging_gdb = Path(self.staging_gdb).resolve()
         self.sde_connection = Path(self.sde_connection).resolve()
@@ -46,7 +51,15 @@ class ProcessingConfig:
     aoi_bbox_wkid: int
 
     def __post_init__(self) -> None:
-        """Validate processing configuration."""
+        """
+        Validate ProcessingConfig fields after initialization.
+        
+        Raises:
+            ValueError: If `aoi_bbox` does not contain exactly four coordinates [xmin, ymin, xmax, ymax].
+        
+        Notes:
+            - Logs a warning if `target_wkid` or `aoi_bbox_wkid` fall outside the typical EPSG numeric range (1000–9999).
+        """
         if len(self.aoi_bbox) != 4:
             raise ValueError("aoi_bbox must contain exactly 4 coordinates [xmin, ymin, xmax, ymax]")
 
@@ -74,7 +87,20 @@ class SourceConfig:
     REQUIRES_GEOMETRY = {"ogc", "wfs"}
 
     def __post_init__(self) -> None:
-        """Validate source configuration based on type."""
+        """
+        Validate and normalize a SourceConfig after initialization.
+        
+        Performs type-specific checks and normalization:
+        - Requires a geometry for source types in REQUIRES_GEOMETRY (raises ValueError if missing).
+        - Emits a warning if an "ogc" or "wfs" source has no collections.
+        - Validates the URL:
+          - For "file" sources accepts file:// URLs, absolute filesystem paths, or non-http(s) URLs; otherwise raises ValueError.
+          - For non-"file" sources requires an http:// or https:// URL; otherwise raises ValueError.
+        - Sanitizes and replaces the `name` and `authority` fields (non-alphanumeric characters collapsed to underscores, trimmed).
+        
+        Raises:
+            ValueError: If a required geometry is missing or if the URL is invalid for the source type.
+        """
         # Geometry required for sources that return GeoJSON
         if self.type in self.REQUIRES_GEOMETRY and not self.geometry:
             raise ValueError(f"geometry field required for {self.type} sources. Valid values: {', '.join(GeometryType.__args__)}")
@@ -102,7 +128,18 @@ class SourceConfig:
 
     @staticmethod
     def _sanitize_name(name: str) -> str:
-        """Sanitize name for filesystem and database compatibility."""
+        """
+        Sanitize a name for filesystem and database compatibility.
+        
+        Replaces non-alphanumeric characters with underscores, collapses consecutive underscores,
+        and strips leading/trailing underscores.
+        
+        Parameters:
+            name (str): Input name to sanitize.
+        
+        Returns:
+            str: Sanitized string safe for use in filenames and identifier fields.
+        """
         # Replace non-alphanumeric with underscores
         sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
         # Remove multiple underscores
@@ -118,13 +155,30 @@ class PipelineConfig:
     sources: List[SourceConfig]
 
     def __post_init__(self) -> None:
-        """Validate complete configuration on initialization."""
+        """
+        Run post-initialization validation for the PipelineConfig.
+        
+        Performs workspace path validation, enforces that source names are unique within the same authority
+        (raises ValueError on duplicates), and emits a summary of enabled sources by type. This method
+        is called automatically after dataclass initialization and may produce warnings for non-fatal
+        issues (missing files, invalid parent directories).
+        """
         self._validate_workspace_paths()
         self._validate_source_names_unique()
         self._log_configuration_summary()
 
     def _validate_workspace_paths(self) -> None:
-        """Validate that required workspace paths are accessible."""
+        """
+        Validate required workspace filesystem paths.
+        
+        Raises:
+            ValueError: If the parent directory of `workspace.downloads` or the parent directory
+                of `workspace.staging_gdb` does not exist.
+            
+        Notes:
+            If the `workspace.sde_connection` file itself is missing, the method does not raise;
+            it emits a warning instead.
+        """
         # Check parent directories exist
         if not self.workspace.downloads.parent.exists():
             raise ValueError(f"Downloads parent directory does not exist: {self.workspace.downloads.parent}")
@@ -137,7 +191,13 @@ class PipelineConfig:
             logger.warning(f"SDE connection file does not exist: {self.workspace.sde_connection}")
 
     def _validate_source_names_unique(self) -> None:
-        """Ensure all source names are unique within authorities."""
+        """
+        Ensure all source names are unique within the same authority.
+        
+        Iterates over configured sources and raises a ValueError if two sources share the same name under the same authority.
+        Raises:
+            ValueError: If a duplicate source name is found for an authority.
+        """
         authority_names: Dict[str, List[str]] = {}
 
         for source in self.sources:
@@ -150,7 +210,11 @@ class PipelineConfig:
             authority_names[source.authority].append(source.name)
 
     def _log_configuration_summary(self) -> None:
-        """Log configuration summary for debugging."""
+        """
+        Log a brief summary of enabled sources in the pipeline.
+        
+        Writes an info-level summary that includes the total number of enabled sources and a per-source-type count of enabled sources.
+        """
         enabled_sources = [s for s in self.sources if s.enabled]
         by_type = {}
 
@@ -162,11 +226,31 @@ class PipelineConfig:
             logger.info(f"   {source_type}: {count} sources")
 
     def get_enabled_sources(self) -> List[SourceConfig]:
-        """Get only enabled sources."""
+        """
+        Return the list of sources that are enabled.
+        
+        Returns:
+            List[SourceConfig]: Enabled sources (preserves original order).
+        """
         return [source for source in self.sources if source.enabled]
 
 def load_config(config_path: Path) -> PipelineConfig:
-    """Load and validate pipeline configuration from YAML file."""
+    """
+    Load and validate a pipeline configuration from a YAML file.
+    
+    Reads the YAML at `config_path`, constructs and validates a PipelineConfig
+    (WorkspaceConfig, ProcessingConfig, and SourceConfig items), and returns it.
+    
+    Parameters:
+        config_path (Path): Path to the YAML configuration file.
+    
+    Returns:
+        PipelineConfig: Validated pipeline configuration.
+    
+    Raises:
+        ValueError: If the file cannot be read, contains invalid YAML, is missing
+            required sections, is empty, or fails validation.
+    """
     logger.info(f"📖 Loading configuration from {config_path}")
 
     try:
@@ -197,7 +281,23 @@ def load_config(config_path: Path) -> PipelineConfig:
         raise ValueError(f"Invalid configuration: {e}") from e
 
 def create_example_config() -> Dict[str, Any]:
-    """Create example configuration for documentation."""
+    """
+    Return a representative example configuration dictionary for the v2 pipeline.
+    
+    The returned dictionary matches the structure expected by load_config()/PipelineConfig and is suitable for serializing to YAML as a starter/example config. It includes:
+    
+    - workspace: filesystem paths for 'downloads', 'staging_gdb', and 'sde_connection'.
+    - processing: projection and area-of-interest settings:
+        - target_wkid (int): output spatial reference (example: 3006 SWEREF99 TM).
+        - aoi_bbox (list[float]): [xmin, ymin, xmax, ymax].
+        - aoi_bbox_wkid (int): spatial reference of the AOI bbox.
+    - sources: a list of source definitions. Each source contains keys used by SourceConfig, for example:
+        - An 'ogc' source with 'geometry' and 'collections'.
+        - A 'rest' source with 'layer_ids'.
+    
+    Returns:
+        dict: Example configuration dictionary matching the module's schema.
+    """
     return {
         'workspace': {
             'downloads': './data/downloads',
@@ -233,7 +333,19 @@ def create_example_config() -> Dict[str, Any]:
 # Migration utilities
 def migrate_old_config(old_config_path: Path, old_sources_path: Path,
                       output_path: Path) -> PipelineConfig:
-    """Migrate existing legacy configuration files to new unified format."""
+    """
+                      Migrate legacy two-file configuration (old config + old sources) into the new unified PipelineConfig format and return the validated, loaded configuration.
+                      
+                      Reads the legacy YAML files at old_config_path and old_sources_path, maps workspace and processing fields to the new layout, converts each legacy source to the new source schema (including copying collections or layer_ids when present), and writes the resulting unified YAML to output_path. For OGC/WFS sources the function emits a warning that geometry must be specified manually and defaults the migrated geometry to "POLYGON". Finally, the generated config is loaded and validated via load_config and the resulting PipelineConfig is returned.
+                      
+                      Parameters:
+                          old_config_path (Path): Path to the legacy global config YAML (workspaces, geoprocessing, etc.).
+                          old_sources_path (Path): Path to the legacy sources YAML (list or dict of sources and defaults).
+                          output_path (Path): Path where the migrated unified YAML should be written.
+                      
+                      Returns:
+                          PipelineConfig: The migrated configuration loaded and validated with load_config.
+                      """
     logger.info(f"[MIGRATING] Migrating configuration from {old_config_path} + {old_sources_path}")
 
     # Load old configuration files
