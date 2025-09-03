@@ -23,7 +23,19 @@ def setup_pipeline_logging(
     file_path: Optional[Path] = None,
     file_level: str = "DEBUG"
 ) -> None:
-    """Configure simple, consistent logging for entire pipeline."""
+    """
+    Configure consistent logging for the entire pipeline.
+    
+    Removes any existing root handlers, sets the root logger to DEBUG (to capture all messages),
+    and installs a console StreamHandler writing to stdout. Optionally installs a FileHandler
+    to the provided path (parents created if needed). Console and file handlers use different
+    default formats and respect the provided level names.
+    
+    Parameters:
+        console_level (str): Logging level name for the console handler (e.g., "INFO"). Default: "INFO".
+        file_path (Optional[Path]): If provided, path to the log file; parent directories are created. If None, no file handler is added.
+        file_level (str): Logging level name for the file handler (e.g., "DEBUG"). Ignored if file_path is None. Default: "DEBUG".
+    """
 
     # Clear any existing handlers
     root_logger = std_logging.getLogger()
@@ -55,7 +67,14 @@ def setup_pipeline_logging(
         root_logger.addHandler(file_handler)
 
 def log_phase_start(phase_name: str) -> None:
-    """Standard start message for pipeline phases."""
+    """
+    Log a standard "phase start" message for the pipeline.
+    
+    Logs an INFO-level message indicating the beginning of the given phase (prefixed with a rocket emoji).
+    
+    Parameters:
+        phase_name (str): Human-readable name of the pipeline phase being started.
+    """
     std_logging.info(f"🚀 Starting {phase_name} phase")
 
 def log_source_result(
@@ -64,7 +83,22 @@ def log_source_result(
     feature_count: int = 0,
     error: Optional[str] = None
 ) -> None:
-    """Standard result logging for sources."""
+    """
+    Log a standardized result message for a pipeline source.
+    
+    When success is True:
+    - If feature_count > 0: logs an info message with a checkmark and the feature count (thousands-separated).
+    - If feature_count == 0: logs a generic success info message.
+    
+    When success is False:
+    - Logs an error message with a cross mark and, if provided, the error text in parentheses.
+    
+    Parameters:
+        source_name: Human-readable name of the source being reported.
+        success: True if the source processed successfully, False otherwise.
+        feature_count: Number of features produced by the source (used only on success).
+        error: Optional error description to include when success is False.
+    """
     if success:
         if feature_count > 0:
             std_logging.info(f"✅ {source_name}: {feature_count:,} features")
@@ -75,7 +109,16 @@ def log_source_result(
         std_logging.error(f"❌ {source_name}: failed{error_msg}")
 
 def log_phase_complete(phase_name: str, total_sources: int, successful: int) -> None:
-    """Standard completion message."""
+    """
+    Log a standardized completion message for a pipeline phase.
+    
+    Logs an info message when all sources succeeded; otherwise logs a warning that includes the number of failed sources.
+    
+    Parameters:
+        phase_name: Human-readable name of the pipeline phase (e.g., "ingest").
+        total_sources: Total number of sources expected for the phase.
+        successful: Number of sources that completed successfully.
+    """
     if successful == total_sources:
         std_logging.info(f"✅ {phase_name} complete: {successful}/{total_sources} sources successful")
     else:
