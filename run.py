@@ -194,13 +194,18 @@ def _run_download(cfg, args):
     filtered_cfg = cfg.copy()
     filtered_cfg["sources"] = sources
 
-    from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
+    use_unified = bool(cfg.get("use_unified_downloader", False))
+    if use_unified:
+        from etl import download as unified
+        unified.run(filtered_cfg, authority=args.authority, type=args.type)
+    else:
+        from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
 
-    download_http.run(filtered_cfg)
-    download_atom.run(filtered_cfg)
-    download_ogc.run(filtered_cfg)
-    download_wfs.run(filtered_cfg)
-    download_rest.run(filtered_cfg)
+        download_http.run(filtered_cfg)
+        download_atom.run(filtered_cfg)
+        download_ogc.run(filtered_cfg)
+        download_wfs.run(filtered_cfg)
+        download_rest.run(filtered_cfg)
 
     logging.info("Starting staging process...")
     from etl.stage_files import stage_all_downloads

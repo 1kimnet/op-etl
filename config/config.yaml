@@ -7,6 +7,9 @@ workspaces:
   staging_gdb: "./data/staging.gdb"
   sde_conn: "./data/connections/prod.sde"
 
+# Use the new unified downloader and dispatcher
+use_unified_downloader: true
+
 processing:
   aoi_bbox:
   - 610000

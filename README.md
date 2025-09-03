@@ -126,6 +126,20 @@ python run.py --cleanup
 
 > Note: If no flags are provided, all steps will run in sequence.
 
+### Unified Downloader (optional)
+
+You can enable a single, unified downloads pass that dispatches to existing downloaders per source type. Add this to `config/config.yaml`:
+
+```yaml
+use_unified_downloader: true
+```
+
+It honors `--authority` and `--type` filters. Example:
+
+```cmd
+"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --authority RAA --type ogc
+```
+
 ### Logging
 
 - Console shows `INFO` and above by default (configured via `logging.console_level`).
@@ -143,6 +157,12 @@ logging:
 ```
 
 If you see no immediate output, ensure you are using the ArcGIS Pro Python interpreter. ArcPy is lazily imported so logging initializes before heavy modules load.
+
+To avoid emoji/encoding issues in Windows `cmd.exe`, console logs auto-fallback to ASCII when UTF-8 isn’t detected. You can force ASCII via:
+
+```cmd
+set OP_ETL_ASCII_CONSOLE=1
+```
 
 ## Roadmap
 

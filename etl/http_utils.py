@@ -231,7 +231,29 @@ class HttpClient:
             log.info("GET %s", full_url)
             r = self._http.request("GET", full_url, headers=hdrs, redirect=follow, preload_content=False)
             try:
-                return self._extracted_from_get_18(r, follow, full_url, max_response_mb)
+                status = int(r.status or 0)
+                if not follow and 300 <= status < 400:
+                    loc = r.headers.get("Location")
+                    log.error("Redirect blocked: %s -> %s", full_url, loc)
+                    r.release_conn()
+                    return None
+
+                content = r.read()
+                r.release_conn()
+
+                if _bytes_too_large(content, max_response_mb):
+                    log.warning("Response too large: %s bytes (> %s MB)", len(content), max_response_mb)
+                    return None
+
+                headers_out = {str(k).lower(): str(v) for k, v in r.headers.items()}
+                headers_out["content-length"] = str(len(content))
+
+                return SimpleResponse(
+                    status_code=status or 200,
+                    headers=headers_out,
+                    content=content,
+                    url=getattr(r, "geturl", lambda: full_url)()
+                )
             finally:
                 with contextlib.suppress(Exception):
                     r.close()
@@ -241,35 +263,6 @@ class HttpClient:
         except Exception as e:
             log.error("HTTP error for %s: %s", url, e)
             return None
-
-    # TODO Rename this here and in `get`
-    def _extracted_from_get_18(self, r, follow, full_url, max_response_mb):
-        status = self.new_method(r)
-
-        if not follow and 300 <= status < 400:
-            return self._extracted_from_download_file_5(
-                r, "Redirect blocked: %s -> %s", full_url, None
-            )
-        content = r.read()
-        r.release_conn()
-
-        if _bytes_too_large(content, max_response_mb):
-            log.warning("Response too large: %s bytes (> %s MB)", len(content), max_response_mb)
-            return None
-
-        headers_out = {str(k).lower(): str(v) for k, v in r.headers.items()}
-        headers_out["content-length"] = str(len(content))
-
-        return SimpleResponse(
-            status_code=status or 200,
-            headers=headers_out,
-            content=content,
-            url=getattr(r, "geturl", lambda: full_url)()
-        )
-
-    def new_method(self, r):
-        status = int(r.status or 0)
-        return status
 
     def get_json(
         self,
@@ -333,11 +326,11 @@ class HttpClient:
             r = self._http.request("GET", full_url, headers=hdrs, redirect=follow, preload_content=False)
             try:
                 status = int(r.status or 0)
-
                 if not follow and 300 <= status < 400:
-                    return self._extracted_from_download_file_5(
-                        r, "Redirect blocked (download): %s -> %s", full_url, False
-                    )
+                    loc = r.headers.get("Location")
+                    log.error("Redirect blocked (download): %s -> %s", full_url, loc)
+                    r.release_conn()
+                    return False
                 # size hint by header
                 with contextlib.suppress(Exception):
                     length_header = r.headers.get("Content-Length")
@@ -387,12 +380,7 @@ class HttpClient:
             log.error("Download error for %s: %s", url, e)
             return False
 
-    # TODO Rename this here and in `_extracted_from_get_18` and `download_file`
-    def _extracted_from_download_file_5(self, r, arg1, full_url, arg3):
-        loc = r.headers.get("Location")
-        log.error(arg1, full_url, loc)
-        r.release_conn()
-        return arg3
+    # (helper removed: redirect handling inlined for clarity)
 # --------------------------------------------------------------------------------------
 
 def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int = MAX_JSON_DEPTH) -> Optional[Dict[str, Any]]:
@@ -413,19 +401,10 @@ def safe_json_parse(content: BytesLike, *, max_size_mb: int = 50, max_depth: int
 
         # Parse with standard library
         try:
-            data = json.loads(content)
-
-            # Validate depth after parsing
-            if _json_depth(data, 0, max_depth) > max_depth:
-                log.warning(f"[JSON] Exceeds maximum nesting depth of {max_depth}")
-                return None
-
-            return data
+            data = json.loads(text)
         except json.JSONDecodeError as e:
-            log.error(f"[JSON] Parse error: {e}")
+            log.error("[JSON] Parse error: %s", e)
             return None
-
-        data = json.loads(text)
 
         if _json_depth(data, 0, max_depth) > max_depth:
             log.warning("[JSON] Exceeds maximum nesting depth of %s", max_depth)
