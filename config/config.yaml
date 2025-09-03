@@ -18,17 +18,17 @@ processing:
 sources:
 - authority: FM
   enabled: true
-  name: "F\xF6rsvarsmakten - Rikst\xE4ckande geodata"
+  name: "Försvarsmakten - Rikstäckande geodata"
   type: file
   url: https://www.forsvarsmakten.se/siteassets/2-om-forsvarsmakten/samhallsplanering/geodata/rikstackande-geodata-forsvarsmakten.zip
 - authority: NVV
   enabled: true
-  name: "Naturv\xE5rdsverket - Naturv\xE5rdsregistret"
+  name: "Naturvårdsverket - Naturvårdsregistret"
   type: file
   url: https://geodata.naturvardsverket.se/nedladdning/naturvardsregistret/
 - authority: LST
   enabled: true
-  name: "Milj\xF6riskomr\xE5de"
+  name: "Miljöriskområde"
   type: atom
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.LST_Miljoriskomrade.xml
 - authority: LST
@@ -38,12 +38,12 @@ sources:
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_vindkraftverk.xml
 - authority: LST
   enabled: true
-  name: "Vindkraftskollen: Projekteringsomr\xE5den"
+  name: "Vindkraftskollen: Projekteringsområden"
   type: atom
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_lst.vbk_projekteringsomraden.xml
 - authority: LST
   enabled: true
-  name: "Potentiellt f\xF6rorenade omr\xE5den"
+  name: "Potentiellt förorenade områden"
   type: file
   url: https://ext-dokument.lansstyrelsen.se/Gemensamt/Geodata/Datadistribution/SWEREF99TM/EBH_Potentiellt_fororenade_omraden.zip
 - authority: LST
@@ -62,7 +62,7 @@ sources:
 - authority: LSTD
   enabled: true
   layer_ids: []
-  name: "LstD F\xF6reskrifter"
+  name: "LstD Föreskrifter"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Foreskrifter_EXT/MapServer
 - authority: LSTD
@@ -96,7 +96,7 @@ sources:
 - authority: LSTD
   enabled: true
   layer_ids: []
-  name: "LstD God bebyggd milj\xF6"
+  name: "LstD God bebyggd miljö"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_God_bebyggd_miljo_EXT/MapServer
 - authority: LSTD
@@ -121,7 +121,7 @@ sources:
   - 15
   - 16
   - 17
-  name: "LstD Levande sj\xF6ar och vattendrag"
+  name: "LstD Levande sjöar och vattendrag"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Levande_sjoar_och_vattendrag_EXT/MapServer
 - authority: LSTD
@@ -146,7 +146,7 @@ sources:
   enabled: true
   layer_ids:
   - 1
-  name: "LstD Kulturmilj\xF6"
+  name: "LstD Kulturmiljö"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Kulturmiljo_EXT/MapServer
 - authority: LSTD
@@ -169,19 +169,19 @@ sources:
 - authority: LSTD
   enabled: true
   layer_ids: []
-  name: "LstD Naturkartl\xE4ggning"
+  name: "LstD Naturkartläggning"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Naturkartlaggning_EXT/MapServer
 - authority: LSTD
   enabled: true
   layer_ids: []
-  name: "LstD Skog och tr\xE4d"
+  name: "LstD Skog och träd"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_Skog_och_trad_EXT/MapServer
 - authority: LSTD
   enabled: true
   layer_ids: []
-  name: "LstD GI V\xE4rdetrakter v\xE5tmark"
+  name: "LstD GI Värdetrakter våtmark"
   type: rest
   url: https://ext-geodata-lokala-visning.lansstyrelsen.se/arcgis/rest/services/LSTD/LstD_GI_Myllrande_vatmarker_EXT/MapServer
 - authority: LSTD
@@ -197,7 +197,7 @@ sources:
   url: https://inspire.msb.se/nedladdning/filer/shape/Skyddsrum.zip
 - authority: RAA
   enabled: true
-  name: "Riksintresse Kulturmilj\xF6v\xE5rd MB3kap6"
+  name: "Riksintresse Kulturmiljövård MB3kap6"
   type: atom
   url: https://ext-dokument.lansstyrelsen.se/gemensamt/geodata/ATOM/ATOM_raa.RAA_RI_kulturmiljovard_MB3kap6.xml
 - authority: RAA
@@ -207,22 +207,22 @@ sources:
   url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnader_kulthist_inv/byggnader_sverige.gpkg
 - authority: RAA
   enabled: true
-  name: "Enskilda och statliga byggnadsminnen, skyddsomr\xE5den"
+  name: "Enskilda och statliga byggnadsminnen, skyddsområden"
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/bebyggelse/byggnadsminne_skyddsomr/skyddsomrade_byggnadsminne_sverige.gpkg
 - authority: RAA
   enabled: true
-  name: "Kulturhistoriska l\xE4mningar, S\xF6dermanland"
+  name: "Kulturhistoriska lämningar, Södermanland"
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/lamningar/lan/l%C3%A4mningar_l%C3%A4n_s%C3%B6dermanland.gpkg
 - authority: RAA
   enabled: true
-  name: "RAA V\xE4rldsarv i Sverige"
+  name: "RAA Världsarv i Sverige"
   type: file
   url: https://pub.raa.se/nedladdning/datauttag/varldsarv/varldsarv_sverige.gpkg
 - authority: SGI
   enabled: true
-  name: "Intr\xE4ffade skred, ras och \xF6vriga jordr\xF6relser (skreddatabas)"
+  name: "Inträffade skred, ras och övriga jordrörelser (skreddatabas)"
   type: file
   url: https://gis.sgi.se/dokument/geodatasezip/SGI_Skreddatabas_ver2.zip
 - authority: SGU
@@ -276,12 +276,12 @@ sources:
   layer_ids:
   - 4
   - 5
-  name: "\xC4ngs- och betesmarksinventeringen"
+  name: "Ängs- och betesmarksinventeringen"
   type: rest
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/SJV/lst_sjv_fak04ovr/MapServer
 - authority: SKS
   enabled: true
-  name: "Naturv\xE4rden"
+  name: "Naturvärden"
   type: file
   url: https://geodpags.skogsstyrelsen.se/geodataport/data/sksNaturvarden_gpkg.zip
 - authority: SKS
@@ -303,19 +303,19 @@ sources:
 - authority: SKS
   enabled: true
   layer_ids: null
-  name: "Utf\xF6rda avverkningar"
+  name: "Utförda avverkningar"
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaUtfordavverkning/MapServer
 - authority: SKS
   enabled: true
   layer_ids: null
-  name: "Naturv\xE5rdsavtal"
+  name: "Naturvårdsavtal"
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaNaturvardsavtal/MapServer
 - authority: SKS
   enabled: true
   layer_ids: null
-  name: "\xC5terv\xE4tningsavtal"
+  name: "Återvätningsavtal"
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAtervatningavtal/MapServer
 - authority: SKS
@@ -333,13 +333,13 @@ sources:
 - authority: SKS
   enabled: true
   layer_ids: null
-  name: "Avverkningsanm\xE4lda omr\xE5den"
+  name: "Avverkningsanmälda områden"
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaAvverkningsanmalan/MapServer
 - authority: SKS
   enabled: true
   layer_ids: null
-  name: "Gr\xE4ns f\xF6r skogsskyddsbest\xE4mmelser"
+  name: "Gräns för skogsskyddsbestämmelser"
   type: rest
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsskyddsbestammelser/MapServer
 - authority: SKS
@@ -350,7 +350,7 @@ sources:
   url: https://geodpags.skogsstyrelsen.se/arcgis/rest/services/Geodataportal/GeodataportalVisaSkogsbruknyckelbiotop/MapServer
 - authority: SVK
   enabled: true
-  name: "Stamn\xE4t"
+  name: "Stamnät"
   type: file
   url: https://gis-services.metria.se/svkfeed/filer/SVK_STAMNAT.zip
 - authority: TRV
@@ -359,14 +359,14 @@ sources:
   - 0
   - 1
   - 2
-  name: "V\xE4gar"
+  name: "Vägar"
   type: rest
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak01/MapServer
 - authority: TRV
   enabled: true
   layer_ids:
   - 2
-  name: "\xD6vrigt"
+  name: "Övrigt"
   type: rest
   url: https://ext-geodata-nationella.lansstyrelsen.se/arcgis/rest/services/TV/lst_tv_fak06/MapServer
 # (Removed duplicated workspace block)
