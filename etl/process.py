@@ -73,8 +73,8 @@ def run(cfg):
     processed_file = Path(staging_gdb).parent / "processed_feature_classes.json"
     if aoi is not None:
         try:
-            with open(processed_file, 'w') as f:
-                json.dump(successfully_processed, f, indent=2)
+            with open(processed_file, 'w', encoding='utf-8') as f:
+                json.dump(successfully_processed, f, indent=2, ensure_ascii=False)
             logging.info(f"[PROCESS] Saved {len(successfully_processed)} successfully processed feature classes to {processed_file}")
         except IOError as e:
             logging.warning(f"[PROCESS] Failed to save processed feature classes list: {e}")

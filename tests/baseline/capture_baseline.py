@@ -9,14 +9,14 @@ Usage:
     python tests/baseline/capture_baseline.py --config config/config.yaml --sources config/sources.yaml
 """
 
-import logging
-import json
-import time
-import sys
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
-from pathlib import Path
 import argparse
+import json
+import logging
+import sys
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -54,7 +54,7 @@ class BaselineCapture:
 
     def execute_baseline_capture(self, max_sources: int = 5) -> List[SourceBaseline]:
         """Execute current pipeline and capture all metrics."""
-        logger.info("🔍 Starting baseline capture")
+        logger.info("Starting baseline capture")
 
         # Load current configuration
         from etl.config import load_config
@@ -134,27 +134,49 @@ class BaselineCapture:
         try:
             import arcpy
             staging_gdb = config['workspaces']['staging_gdb']
-            
+
             # List and delete all feature classes
             if Path(staging_gdb).exists():
-                arcpy.env.workspace = staging_gdb
-                fcs = arcpy.ListFeatureClasses()
-                for fc in fcs or []:
+                # Use arcpy.da.Walk to avoid relying on env.workspace
+                to_delete = []
+                for dirpath, dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
+                    for fc in filenames:
+                        to_delete.append(f"{staging_gdb}/{fc}")
+
+                deleted = 0
+                for fc_path in to_delete:
                     try:
-                        logger.debug(f"Deleted existing FC: {fc}")
-                    except arcpy.ExecuteError as ex:
-                        logger.debug(f"ArcPy ExecuteError deleting {fc}: {arcpy.GetMessages(2)}")
+                        if arcpy.Exists(fc_path):
+                            arcpy.management.Delete(fc_path)
+                            deleted += 1
+                    except arcpy.ExecuteError:
+                        logger.debug(f"ArcPy ExecuteError deleting {fc_path}: {arcpy.GetMessages(2)}")
                     except Exception as e:
-                        logger.debug(f"Could not delete {fc}: {e}")
-                arcpy.env.workspace = None
+                        logger.debug(f"Could not delete {fc_path}: {e}")
+
+                logger.info(f"[BASELINE] Cleared {deleted} feature classes from staging")
         except Exception as e:
             logger.debug(f"Staging cleanup warning: {e}")
+
+    def _prepare_clean_downloads(self, config: Dict[str, Any], source: Dict[str, Any]) -> None:
+        """Remove all previous downloads to force a fresh download for this source."""
+        try:
+            downloads_dir = Path(config['workspaces']['downloads'])
+            if downloads_dir.exists():
+                import shutil
+                shutil.rmtree(downloads_dir, ignore_errors=True)
+                logger.info(f"[BASELINE] Removed previous downloads: {downloads_dir}")
+        except Exception as e:
+            logger.debug(f"Downloads cleanup warning: {e}")
 
     def _execute_single_source_pipeline(self, source: Dict[str, Any], config: Dict[str, Any]) -> None:
         """Execute download and staging for a single source."""
         # Create filtered config with only this source
         filtered_config = config.copy()
         filtered_config['sources'] = [source]
+
+        # Ensure we force a fresh download for this source
+        self._prepare_clean_downloads(filtered_config, source)
 
         # Registry mapping source types to downloader modules
         downloader_registry = {
@@ -184,13 +206,14 @@ class BaselineCapture:
         try:
             import arcpy
             staging_gdb = config['workspaces']['staging_gdb']
-            
+
             if not Path(staging_gdb).exists():
                 return None
 
-            arcpy.env.workspace = staging_gdb
-            fcs = arcpy.ListFeatureClasses()
-            arcpy.env.workspace = None
+            # List FCs using da.Walk for reliability without mutating env
+            fcs: List[str] = []
+            for _dirpath, _dirnames, filenames in arcpy.da.Walk(staging_gdb, datatype="FeatureClass"):
+                fcs.extend(filenames)
 
             if not fcs:
                 return None
@@ -198,14 +221,14 @@ class BaselineCapture:
             # Look for FC that matches source name pattern
             source_name = source['name']
             authority = source.get('authority', '')
-            
+
             # Try different naming patterns
             candidates = [
                 f"{authority}_{source_name}",
                 source_name,
                 f"{source_name}_{authority}",
             ]
-            
+
             for fc in fcs:
                 fc_lower = fc.lower()
                 for candidate in candidates:
@@ -234,7 +257,7 @@ class BaselineCapture:
 
             # Get feature count
             count_result = arcpy.management.GetCount(fc_path)
-            feature_count = int(count_result[0])
+            feature_count = int(str(count_result[0]))
 
             # Get geometry and spatial reference info
             desc = arcpy.Describe(fc_path)
@@ -282,16 +305,17 @@ class BaselineCapture:
         """Save baseline results to JSON file."""
         output_file = self.output_dir / "baseline_results.json"
 
-        with output_file.open('w') as f:
-            json.dump([b.to_dict() for b in baselines], f, indent=2, default=str)
-
-        logger.info(f"💾 Baseline results saved to {output_file}")
+        # Use UTF-8 to support non-ASCII characters in names/paths
+        with output_file.open('w', encoding='utf-8') as f:
+            json.dump([b.to_dict() for b in baselines], f, indent=2, default=str, ensure_ascii=False)
+        logger.info(f"Baseline results saved to {output_file}")
 
     def _generate_baseline_report(self, baselines: List[SourceBaseline]) -> None:
         """Generate human-readable baseline report."""
         report_file = self.output_dir / "baseline_report.md"
 
-        with report_file.open('w') as f:
+        # Write Markdown with UTF-8 to allow emojis and locale-specific characters
+        with report_file.open('w', encoding='utf-8') as f:
             f.write("# OP-ETL Baseline Report\n\n")
             f.write(f"**Generated**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
@@ -335,34 +359,30 @@ class BaselineCapture:
             success_rate = len(successful) / len(baselines) * 100 if baselines else 0
 
             f.write(f"- **Success Rate**: {success_rate:.1f}% ({len(successful)}/{len(baselines)})\n")
-            f.write(f"- **Total Features**: {total_features:,}\n") 
+            f.write(f"- **Total Features**: {total_features:,}\n")
             f.write(f"- **Average Processing Time**: {avg_time:.2f}s\n")
-
-        logger.info(f"📊 Baseline report generated: {report_file}")
+        logger.info(f"Baseline report generated: {report_file}")
 
 def main():
     """Main entry point for baseline capture."""
     parser = argparse.ArgumentParser(description="Capture OP-ETL baseline metrics")
-    parser.add_argument("--config", type=Path, default=Path("config/config.yaml"), 
+    parser.add_argument("--config", type=Path, default=Path("config/config.yaml"),
                        help="Path to config.yaml")
     parser.add_argument("--sources", type=Path, default=Path("config/sources.yaml"),
-                       help="Path to sources.yaml") 
+                       help="Path to sources.yaml")
     parser.add_argument("--output", type=Path, default=Path("tests/baseline"),
                        help="Output directory for baseline results")
     parser.add_argument("--max-sources", type=int, default=5,
                        help="Maximum number of sources to test")
-    parser.add_argument("--log-level", default="INFO", 
+    parser.add_argument("--log-level", default="INFO",
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Logging level")
 
     args = parser.parse_args()
 
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format='%(asctime)s | %(levelname)-8s | %(message)s',
-        datefmt='%H:%M:%S'
-    )
+    # Setup centralized logging
+    from etl.logging import setup_pipeline_logging
+    setup_pipeline_logging(console_level=args.log_level, file_path=Path("logs") / "baseline_tests.log")
 
     try:
         baseline_capture = BaselineCapture(
@@ -372,16 +392,16 @@ def main():
         )
 
         results = baseline_capture.execute_baseline_capture(args.max_sources)
-        
+
         successful = len([r for r in results if r.success])
         total = len(results)
-        
-        print(f"\n🎉 Baseline capture complete!")
+
+        print("\nBaseline capture complete!")
         print(f"   Sources tested: {total}")
         print(f"   Successful: {successful} ({successful/total*100:.1f}%)")
         print(f"   Results: {args.output}/baseline_results.json")
         print(f"   Report: {args.output}/baseline_report.md")
-        
+
         return 0 if successful > 0 else 1
 
     except Exception as e:

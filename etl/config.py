@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -36,7 +37,23 @@ def load_config(
     )
 
     cfg = _read_yaml(config_path)
-    src = _read_yaml(sources_path)
+
+    # Resolve sources with fallbacks if the primary file is missing
+    resolved_sources_path = sources_path
+    if not Path(resolved_sources_path).exists():
+        candidates = [
+            Path("config/sources_backup.yaml"),
+            Path("config/legacy/sources.yaml"),
+        ]
+        for cand in candidates:
+            if cand.exists():
+                logging.warning(
+                    f"[CONFIG] {resolved_sources_path} not found; falling back to {cand}"
+                )
+                resolved_sources_path = cand
+                break
+
+    src = _read_yaml(Path(resolved_sources_path))
 
     # Extract defaults and sources from sources.yaml
     if isinstance(src, dict):

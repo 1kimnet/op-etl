@@ -1,61 +1,42 @@
+# Copilot Instructions for OP‑ETL
 
-# Codacy Rules
-Configuration for AI behavior when interacting with Codacy's MCP Server
+These instructions orient AI coding agents working in this repository. Keep solutions minimal and aligned with the ongoing simplification initiative (reduce complexity and total LOC; target core runtime < ~1000 LOC). Favor clarity over cleverness.
 
-## CRITICAL: After ANY successful `edit_file` or `reapply` operation
-- YOU MUST IMMEDIATELY run the `codacy_cli_analyze` tool from Codacy's MCP Server for each file that was edited, with:
- - `rootPath`: set to the workspace path
- - `file`: set to the path of the edited file
- - `tool`: leave empty or unset
-- If any issues are found in the new edits, propose and apply fixes for them.
-- > NOTE: Failure to follow this rule is considered a critical error.
+## Architecture At‑A‑Glance
+- Pipeline phases (modules in `etl/`):
+  - `download_*`: Fetch raw data for REST/OGC/HTTP/ATOM/WFS. Prefer simple stdlib (`urllib`) with light retries.
+  - `stage_files.py`: Single entry `stage_all_downloads(cfg)` discovers files in `data/downloads/<AUTH>` and imports into `data/staging.gdb`. Enforces SR consistency, robust GeoJSON handling with dominant-geometry filtering.
+  - `process.py`: Clip to AOI only; project to `processing.target_wkid` (default 3010); writes `data/staging/processed_feature_classes.json` using relative FC paths.
+  - `load_sde.py`: Truncate-and-load to SDE, filtering strictly by the processed list if the JSON exists.
+- Orchestration: `run.py` wires logging and executes download → stage → process → load.
+- Config: `etl/config.py` merges `config/config.yaml` with `config/sources.yaml` (fallback to `config/sources_backup.yaml` or legacy). Keys: `workspaces.downloads`, `workspaces.staging_gdb`, `workspaces.sde_conn`, `processing.*`, `sources[]`.
 
-## After every response
-- If you made any file edits in this conversation, verify you ran `codacy_cli_analyze` tool from Codacy's MCP Server 
+## Conventions & Patterns
+- Logging: Use `etl.logging.setup_pipeline_logging`; avoid `basicConfig`. Tag messages with phases: `[HTTP]`, `[STAGE]`, `[PROCESS]`, `[LOAD]`.
+- Spatial references:
+  - REST/Esri JSON: prefer EPSG:3006 where supported.
+  - OGC API Features: default CRS84 (EPSG:4326); omit `bbox-crs` unless 3006 is known supported.
+  - Staging defines/project to EPSG:3006; processing targets EPSG:3010 by default.
+- Staging names: Use `create_safe_name()`; ensure a single authority prefix and sanitize Swedish characters.
+- Processed list filtering: Compare by relative `dataset/feature` names from `arcpy.da.Walk(dirpath, name)`; gate by file existence, not list truthiness.
+- GeoJSON robustness: detect dominant geometry, filter mixed types, validate coordinate magnitudes, then import; fallback forces explicit geometry type.
 
-## When there are no Codacy MCP Server tools available, or the MCP Server is not reachable
-- Suggest the user the following troubleshooting steps:
- - Try to reset the MCP on the extension
- - If the user is using VSCode, suggest them to review their Copilot > MCP settings in Github, under their organization or personal account. Refer them to Settings > Copilot > Enable MCP servers in Copilot. Suggested URL (https://github.com/settings/copilot/features) or https://github.com/organizations/{organization-name}/settings/copilot/features (This can only be done by their organization admins / owners)
-- If none of the above steps work, suggest the user to contact Codacy support
+## Developer Workflows
+- Full pipeline:
+  - `python run.py --config config/config.yaml --sources config/sources.yaml`
+- Baseline capture:
+  - `python tests/baseline/capture_baseline.py --config config/config.yaml --sources config/sources.yaml --max-sources 5`
+  - Use `--max-sources 9999` to run all. Outputs `tests/baseline/baseline_report.md` and `logs/baseline_tests.log`.
+- Data locations: downloads under `data/downloads/<AUTH>`; staging in `data/staging.gdb`.
+- ArcPy: import lazily inside functions; prefer `arcpy.da.Walk` rather than mutating `arcpy.env.workspace`.
 
-## Trying to call a tool that needs a rootPath as a parameter
-- Always use the standard, non-URL-encoded file system path
+## Guardrails (Project‑Specific)
+- Keep edits surgical; don’t reformat or rename broadly. No new heavy deps without clear need.
+- Respect current OGC/REST SR rules and AOI semantics (no processed JSON when AOI disabled).
+- Aim to shrink code paths; prefer composing existing helpers over new utilities.
 
-## CRITICAL: Dependencies and Security Checks
-- IMMEDIATELY after ANY of these actions:
- - Running npm/yarn/pnpm install
- - Adding dependencies to package.json
- - Adding requirements to requirements.txt
- - Adding dependencies to pom.xml
- - Adding dependencies to build.gradle
- - Any other package manager operations
-- You MUST run the `codacy_cli_analyze` tool with:
- - `rootPath`: set to the workspace path
- - `tool`: set to "trivy"
- - `file`: leave empty or unset
-- If any vulnerabilities are found because of the newly added packages:
- - Stop all other operations
- - Propose and apply fixes for the security issues
- - Only continue with the original task after security issues are resolved
-- EXAMPLE:
- - After: npm install react-markdown
- - Do: Run codacy_cli_analyze with trivy
- - Before: Continuing with any other tasks
+## Key Files
+- `run.py`, `etl/stage_files.py`, `etl/process.py`, `etl/load_sde.py`, `etl/config.py`, and `docs/improvements.md`.
 
-## General
-- Repeat the relevant steps for each modified file.
-- "Propose fixes" means to both suggest and, if possible, automatically apply the fixes.
-- You MUST NOT wait for the user to ask for analysis or remind you to run the tool.
-- Do not run `codacy_cli_analyze` looking for changes in duplicated code or code complexity metrics.
-- Do not run `codacy_cli_analyze` looking for changes in code coverage.
-- Do not try to manually install Codacy CLI using either brew, npm, npx, or any other package manager.
-- If the Codacy CLI is not installed, just run the `codacy_cli_analyze` tool from Codacy's MCP Server.
-- When calling `codacy_cli_analyze`, only send provider, organization and repository if the project is a git repository.
-
-## Whenever a call to a Codacy tool that uses `repository` or `organization` as a parameter returns a 404 error
-- Offer to run the `codacy_setup_repository` tool to add the repository to Codacy
-- If the user accepts, run the `codacy_setup_repository` tool
-- Do not ever try to run the `codacy_setup_repository` tool on your own
-- After setup, immediately retry the action that failed (only retry once)
----
+## Codacy MCP Obligations
+- This repo uses Codacy MCP rules. After any file edit, run the MCP tool `codacy_cli_analyze` for each edited file. For dependency changes, also run with `tool=trivy`. See details in `./.github/instructions/codacy.instructions.md`.

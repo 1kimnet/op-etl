@@ -255,9 +255,20 @@ def main():
         print(f"Config error: {e}", file=sys.stderr)
         raise SystemExit(f"Config error: {e}") from e
 
-    # 2) now configure logging from YAML
-    from etl.logging_config import setup_logging
-    setup_logging(cfg.get("logging"))
+    # 2) configure unified logging
+    from etl.logging import setup_pipeline_logging
+    # Map old YAML options if present; default to console INFO and file logs to logs/etl.log
+    log_cfg = cfg.get("logging") or {}
+    console_level = (log_cfg.get("level") or log_cfg.get("console_level") or "INFO").upper()
+    file_path = None
+    file_cfg = log_cfg.get("file") or {}
+    if file_cfg.get("enabled", True):
+        file_name = file_cfg.get("name") or "etl.log"
+        file_path = Path("logs") / file_name
+        file_level = (file_cfg.get("level") or "DEBUG").upper()
+    else:
+        file_level = "DEBUG"
+    setup_pipeline_logging(console_level=console_level, file_path=file_path, file_level=file_level)
 
     # Suppress noisy urllib3 retry WARNINGs (e.g., connectionpool Retrying ...)
     for name in (
