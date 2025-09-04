@@ -315,14 +315,17 @@ def _import_geojson(geojson_path, authority, staging_gdb):
 
 
 def _flatten_coordinates_simple(coords):
-    """Simple coordinate flattening for validation."""
+    """Simple coordinate flattening for validation (iterative, avoids recursion)."""
     if not coords:
         return []
     
     flat = []
-    for item in coords:
+    stack = [coords]
+    while stack:
+        item = stack.pop()
         if isinstance(item, (list, tuple)):
-            flat.extend(_flatten_coordinates_simple(item))
+            # Add items in reverse order so they are processed in original order
+            stack.extend(reversed(item))
         else:
             flat.append(item)
     return flat
