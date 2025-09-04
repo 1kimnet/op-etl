@@ -265,22 +265,19 @@ def _import_geojson(geojson_path, authority, staging_gdb, source_config=None):
 
 
 def _flatten_coordinates_simple(coords):
-    """Simple coordinate flattening for validation (iterative, avoids recursion)."""
+    """Simple coordinate flattening for validation (recursive, preserves order)."""
     if not coords:
         return []
     
-    flat = []
-    stack = [coords]
-    while stack:
-        item = stack.pop()
+    def _flatten(item):
         if isinstance(item, (list, tuple)):
-            # Add items in reverse order so they are processed in original order
-            stack.extend(reversed(item))
+            result = []
+            for subitem in item:
+                result.extend(_flatten(subitem))
+            return result
         else:
-            flat.append(item)
-    return flat
-
-
+            return [item]
+    return _flatten(coords)
 def _import_shapefile(shp_path, authority, staging_gdb):
     """Import Shapefile to staging GDB."""
     import arcpy
