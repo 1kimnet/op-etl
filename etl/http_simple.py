@@ -24,7 +24,7 @@ MAX_RESPONSE_SIZE_MB = 50
 class SimpleResponse:
     """Simple response wrapper for HTTP responses."""
 
-    def __init__(self, status: int, data: bytes, headers: dict = None):
+    def __init__(self, status: int, data: bytes, headers: dict | None = None):
         self.status = status
         self.data = data
         self.headers = headers or {}
@@ -58,7 +58,7 @@ class SimpleHttpClient:
             retries=retry_strategy
         )
 
-    def get(self, url: str, headers: dict = None) -> Optional[SimpleResponse]:
+    def get(self, url: str, headers: dict | None = None) -> Optional[SimpleResponse]:
         """Perform HTTP GET request."""
         try:
             logger.debug(f"[HTTP] GET {url}")
@@ -85,6 +85,7 @@ class SimpleHttpClient:
 
     def download(self, url: str, output_path: Path) -> bool:
         """Download file to specified path."""
+        response = None
         try:
             logger.info(f"[HTTP] Downloading {url} to {output_path}")
 
@@ -120,7 +121,7 @@ class SimpleHttpClient:
             logger.error(f"[HTTP] Download failed for {url}: {e}")
             return False
         finally:
-            if hasattr(response, 'release_conn'):
+            if response is not None and hasattr(response, 'release_conn'):
                 response.release_conn()
 
 

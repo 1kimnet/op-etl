@@ -6,14 +6,14 @@ Enhanced with geometry type configuration hints.
 Key Features:
 - Geometry type hints from source configuration for predictable results
 - Simple first-feature detection fallback when no hint provided
-- Coordinate validation and spatial reference consistency (projects to SWEREF99 TM)
+- Coordinate validation and spatial reference consistency (projects to target coordinate system from config)
 - Support for GPKG, GeoJSON, Shapefile, and ZIP archive formats
 - Clean error handling and descriptive logging
 
 Usage:
     Set use_simplified_staging: true in config.yaml to use this module.
     Add geometry_type in source raw config for optimal performance:
-    
+
     sources:
     - name: Brunnar
       authority: SGU
@@ -24,6 +24,7 @@ Usage:
         - brunnar-lager
 """
 
+import contextlib
 import json
 import logging
 import shutil
@@ -40,7 +41,7 @@ def _geojson_to_arcpy_geometry_type(geojson_type: str) -> str:
     """Map GeoJSON geometry type to ArcPy geometry type."""
     mapping = {
         "Point": "POINT",
-        "MultiPoint": "MULTIPOINT", 
+        "MultiPoint": "MULTIPOINT",
         "LineString": "POLYLINE",
         "MultiLineString": "POLYLINE",
         "Polygon": "POLYGON",
@@ -51,11 +52,12 @@ def _geojson_to_arcpy_geometry_type(geojson_type: str) -> str:
 
 def stage_all_downloads(config):
     """
-    Stage all downloaded files into staging GDB with SWEREF99 TM SR.
+    Stage all downloaded files into staging GDB with target coordinate system from config.
 
     Args:
         config: Configuration dict with workspaces.downloads, workspaces.staging_gdb and sources
     """
+    import arcpy
 
     downloads_dir = Path(config["workspaces"]["downloads"])
     staging_gdb = Path(config["workspaces"]["staging_gdb"])
@@ -64,26 +66,42 @@ def stage_all_downloads(config):
         logger.warning(f"[STAGE] Downloads directory not found: {downloads_dir}")
         return
 
+    # Get target coordinate system from config (fall back to SWEREF99 TM)
+    processing_config = config.get("processing", {})
+    if target_wkid := processing_config.get("target_wkid"):
+        target_sr = arcpy.SpatialReference(target_wkid)
+        logger.info(f"[STAGE] Using target coordinate system from config: EPSG:{target_wkid}")
+    else:
+        target_sr = arcpy.SpatialReference(SWEREF99_TM)
+        logger.info("[STAGE] Using fallback coordinate system: SWEREF99 TM (EPSG:3006)")
+
     logger.info(f"[STAGE] Staging downloads from {downloads_dir} to {staging_gdb}")
 
-    # Build authority to source mapping for geometry type hints
-    authority_to_source = {}
-    for source in config.get("sources", []):
-        authority = source.get("authority", "").upper()
-        if authority:
-            authority_to_source[authority] = source
+    # Set environment before conversions
+    original_output_cs = arcpy.env.outputCoordinateSystem  # type: ignore
+    arcpy.env.outputCoordinateSystem = target_sr  # type: ignore
 
-    # Discover files to import
-    files_to_import = _discover_files(downloads_dir)
-    logger.info(f"[STAGE] Found {len(files_to_import)} files to import")
+    try:
+        # Build authority to source mapping for geometry type hints
+        authority_to_source = {}
+        for source in config.get("sources", []):
+            if authority := source.get("authority", "").upper():
+                authority_to_source[authority] = source
 
-    for file_path, authority in files_to_import:
-        try:
-            source_config = authority_to_source.get(authority.upper(), {})
-            _import_file_to_staging(file_path, authority, staging_gdb, source_config)
-        except Exception as e:
-            logger.error(f"[STAGE] Failed to import {file_path}: {e}")
-            continue
+        # Discover files to import
+        files_to_import = _discover_files(downloads_dir)
+        logger.info(f"[STAGE] Found {len(files_to_import)} files to import")
+
+        for file_path, authority in files_to_import:
+            try:
+                source_config = authority_to_source.get(authority.upper(), {})
+                _import_file_to_staging(file_path, authority, staging_gdb, source_config)
+            except Exception as e:
+                logger.error(f"[STAGE] Failed to import {file_path}: {e}")
+                continue
+    finally:
+        # Restore original setting
+        arcpy.env.outputCoordinateSystem = original_output_cs  # type: ignore
 
 
 def _discover_files(downloads_dir):
@@ -150,7 +168,7 @@ def _import_gpkg(gpkg_path, authority, staging_gdb):
 
     try:
         # List feature classes in GPKG
-        arcpy.env.workspace = str(gpkg_path)
+        arcpy.env.workspace = str(gpkg_path)  # type: ignore
         feature_classes = arcpy.ListFeatureClasses()
 
         if not feature_classes:
@@ -165,8 +183,7 @@ def _import_gpkg(gpkg_path, authority, staging_gdb):
 
             # Copy with SR transformation
             arcpy.conversion.FeatureClassToFeatureClass(
-                source_fc, str(staging_gdb), target_name,
-                output_coordinate_system=SWEREF99_TM
+                source_fc, str(staging_gdb), target_name
             )
 
     except Exception as e:
@@ -216,8 +233,7 @@ def _import_geojson(geojson_path, authority, staging_gdb, source_config=None):
         # Validate coordinates if possible
         if features:
             first_geom = features[0].get('geometry', {})
-            coords = first_geom.get('coordinates')
-            if coords:
+            if coords := first_geom.get('coordinates'):
                 # Flatten nested coordinates to check first coordinate pair
                 flat_coords = _flatten_coordinates_simple(coords)
                 if len(flat_coords) >= 2:
@@ -232,29 +248,25 @@ def _import_geojson(geojson_path, authority, staging_gdb, source_config=None):
         output_fc = str(staging_gdb / target_name)
 
         # Remove existing feature class if present
-        try:
+        with contextlib.suppress(Exception):
             if arcpy.Exists(output_fc):
                 arcpy.management.Delete(output_fc)
-        except Exception:
-            pass
 
         # Convert to ArcPy geometry type
         arcpy_geom_type = _geojson_to_arcpy_geometry_type(geometry_type)
-        
+
         logger.info(f"[STAGE] Converting {geojson_path.name} -> {target_name} (geometry type: {arcpy_geom_type})")
-        
+
         # Import with explicit geometry type if available
         if arcpy_geom_type:
             arcpy.conversion.JSONToFeatures(
                 str(geojson_path), output_fc,
-                geometry_type=arcpy_geom_type, 
-                spatial_reference=SWEREF99_TM
+                geometry_type=arcpy_geom_type
             )
         else:
             # Fallback to auto-detection
             arcpy.conversion.JSONToFeatures(
-                str(geojson_path), output_fc,
-                spatial_reference=SWEREF99_TM
+                str(geojson_path), output_fc
             )
 
         logger.info(f"[STAGE] Successfully imported {target_name}")
@@ -268,7 +280,7 @@ def _flatten_coordinates_simple(coords):
     """Simple coordinate flattening for validation (recursive, preserves order)."""
     if not coords:
         return []
-    
+
     def _flatten(item):
         if isinstance(item, (list, tuple)):
             result = []
@@ -292,8 +304,7 @@ def _import_shapefile(shp_path, authority, staging_gdb):
 
         # Copy with SR transformation
         arcpy.conversion.FeatureClassToFeatureClass(
-            str(shp_path), str(staging_gdb), target_name,
-            output_coordinate_system=SWEREF99_TM
+            str(shp_path), str(staging_gdb), target_name
         )
 
     except Exception as e:
@@ -349,7 +360,7 @@ def _ensure_sweref99_tm(feature_class_path):
         desc = arcpy.Describe(feature_class_path)
         current_sr = desc.spatialReference
 
-        if current_sr.factoryCode == SWEREF99_TM.factoryCode:
+        if current_sr.factoryCode == SWEREF99_TM:
             logger.debug(f"[STAGE] {feature_class_path} already in SWEREF99 TM")
             return
 
@@ -358,8 +369,9 @@ def _ensure_sweref99_tm(feature_class_path):
         # Create temporary output
         temp_fc = f"{feature_class_path}_temp"
 
+        sweref99_sr = arcpy.SpatialReference(SWEREF99_TM)
         arcpy.management.Project(
-            feature_class_path, temp_fc, SWEREF99_TM
+            feature_class_path, temp_fc, sweref99_sr
         )
 
         # Replace original
