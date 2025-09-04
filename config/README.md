@@ -1,37 +1,84 @@
 # Configuration Files
 
-This directory contains the configuration files for the OP-ETL pipeline.
+This directory contains the configuration for the OP‑ETL pipeline.
 
-## 🟢 Active Configuration
+## Active Configuration (current)
 
-**Currently Used:**
-- `config.yaml` - **ACTIVE** unified configuration file (single file format)
+- `config.yaml` — Global settings (workspaces, geoprocess, logging, bbox, flags)
+- `sources.yaml` — Source definitions list
 
-This is the **only** configuration file currently used by the system.
+Notes:
+-
+- If `sources.yaml` is missing, the loader falls back to `sources_backup.yaml` or `legacy/sources.yaml`.
+- Environment overrides are supported: `OPETL_CONFIG`, `OPETL_SOURCES`.
 
-## 📁 Legacy Files (backup/reference)
+## Legacy/Reference
 
-- `legacy/config.yaml` - Original global pipeline settings (191 lines)
-- `legacy/sources.yaml` - Original source definitions (644 lines)
+- `legacy/config.yaml` and `legacy/sources.yaml` — historical examples kept for reference.
 
-**Cleanup Schedule:** Legacy files will be removed on **2024-04-01** once migration is fully validated.
+## Schema Overview
 
-## Configuration Format
+`config.yaml` (key sections):
 
-The current configuration system uses a single, explicit configuration file that includes:
+```yaml
+workspaces:
+	downloads: ./data/downloads
+	staging_gdb: ./data/staging.gdb
+	sde_conn: ./data/connections/prod.sde
 
-- Workspace settings
-- Processing parameters
-- Complete source definitions with explicit geometry types (eliminates auto-detection)
-- Comprehensive validation with clear error messages
+geoprocess:
+	enabled: true
+	aoi_boundary: ./data/connections/municipality_boundary.shp
+	target_wkid: 3010   # or target_srid
 
-## Migration Complete
+# Optional bbox filter
+use_bbox_filter: true
+global_bbox:
+	coords: [585826, 6550189, 648593, 6611661]
+	crs: 3006  # 3006 | 4326 | "EPSG:3006" | "CRS84"
 
-The new unified configuration replaces the previous split configuration system (config.yaml + sources.yaml) with a cleaner, single-file approach that is:
+# Unified downloader, cleanup flags, logging
+use_unified_downloader: true
+cleanup_downloads_before_run: false
+cleanup_staging_before_run: false
+logging:
+	level: INFO
+	file:
+		enabled: true
+		name: etl.log
+		level: DEBUG
+```
 
-- **Explicit over implicit** - No guessing or auto-detection
-- **Consultant-friendly** - Easy to understand and modify
-- **Type-safe** - Comprehensive validation prevents configuration errors
-- **Maintainable** - Single source of truth for all pipeline configuration
+`sources.yaml`:
 
-Legacy files are preserved in the `legacy/` folder for reference during the transition period but are no longer actively used by the system.
+```yaml
+sources:
+	- name: nvdb_vag
+		authority: NVDB
+		type: rest        # aliases: rest|rest_api
+		url: https://.../ArcGIS/rest/services/Vag/MapServer
+		raw:
+			include: ["*Väg*"]
+			out_fields: "*"
+
+	- name: sgu_erosion
+		authority: SGU
+		type: ogc         # aliases: ogc|ogc_api
+		url: https://.../features/v1/
+		raw:
+			collections: ["aktiv-erosion"]
+
+	- name: open_data_zip
+		authority: FM
+		type: http        # aliases: http|file
+		url: https://.../rikstackande-geodata.zip
+```
+
+Type aliases recognized by the loader: `http|file`, `rest|rest_api`, `ogc|ogc_api`, `atom|atom_feed`, `wfs`.
+
+### Geometry Policy (OGC/WFS)
+
+- Explicit geometry in sources is optional. Staging uses robust GeoJSON handling with dominant‑geometry filtering and magnitude checks.
+- Mixed-geometry datasets are reduced to the dominant geometry in staging. Provide separate sources if strict separation is required.
+
+For more details, see `docs/spatial-reference-consistency.md` and the top-level `README.md`.

@@ -5,16 +5,18 @@ OP-ETL is a lightweight ETL pipeline for geospatial data in Esri environments. I
 
 ## Features
 
-- **Single config file** (`config.yaml`) — all sources, workspaces, and settings in one place
+- **Two-file config** — `config/config.yaml` (settings) + `config/sources.yaml` (sources). Falls back to `config/sources_backup.yaml` or `config/legacy/sources.yaml` if needed.
 - **Multiple source types:**
-  - HTTP downloads (ZIP archives of Shapefiles or FGDBs)
-  - ArcGIS REST services with **parallel OID-batch downloading** for large datasets
-  - OGC API Features (planned)
+  - HTTP/file downloads (ZIP archives of Shapefiles/FGDBs, GPKG, etc.)
+  - ArcGIS REST services with enhanced pagination and OID batching when needed
+  - OGC API Features
+  - WFS 2.0.0
+  - ATOM feeds (enclosure links)
 - **Native Esri format staging** — FileGDB staging ensures smooth ArcPy processing
-- **Optional geoprocessing** — clip to AOI, reproject to target SRID
+- **Optional geoprocessing** — clip to AOI and optionally reproject to a target WKID
 - **Simple SDE load** — truncate-and-load workflow to SQL Server (or other supported RDBMS)
-- **Spatial Reference Consistency** — enforced SR handling with SWEREF99 TM (EPSG:3006) target
-- **High-performance downloads** — 3-10× faster REST downloads via parallel OID batching
+- **Spatial Reference Consistency** — staging defines/projects to SWEREF99 TM (EPSG:3006); processing can reproject to a target WKID (commonly EPSG:3010)
+- **Resilient downloads** — robust REST pagination with OID sweep fallback when transfer limits are hit
 
 ## Basic Workflow
 
@@ -33,16 +35,16 @@ flowchart LR
 1. **Download**: Fetch data from HTTP, REST, or OGC sources with SR consistency
 2. **Validate**: Check coordinate magnitudes and spatial reference integrity
 3. **Stage**: Store datasets in FileGDB with proper SR (EPSG:3006)
-4. **Process** (optional): Clip to AOI and/or reproject
+4. **Process** (optional): Clip to AOI and/or reproject to target WKID (e.g., EPSG:3010)
 5. **Load**: Push processed data into ArcSDE
 
 ## Spatial Reference Handling
 
 The pipeline enforces consistent spatial reference handling:
 
-- **REST APIs**: Use SWEREF99 TM (EPSG:3006) for bbox, inSR, and outSR
-- **OGC APIs**: Default to CRS84, support EPSG:3006 when available
-- **Staging**: All feature classes have defined SR, project to SWEREF99 TM
+- **REST APIs**: Prefer SWEREF99 TM (EPSG:3006) for geometry filters (inSR/outSR); output GeoJSON when supported, else Esri JSON in 3006.
+- **OGC APIs**: Default to CRS84 (EPSG:4326); avoid forcing `bbox-crs` unless confirmed supported.
+- **Staging**: All feature classes have defined SR; stage to SWEREF99 TM (EPSG:3006).
 - **Validation**: Coordinate magnitude checks, no "Unknown" SR allowed
 
 See [Spatial Reference Consistency Documentation](docs/spatial-reference-consistency.md) for details.
@@ -67,32 +69,67 @@ See [Spatial Reference Consistency Documentation](docs/spatial-reference-consist
   pip install -r requirements.txt
   ```
 
-1. Create or edit `config.yaml` to define:
+1. Create or edit `config/config.yaml` and `config/sources.yaml`:
 
-   ```yaml
-   workspaces:
-     downloads: ./_downloads
-     staging_gdb: ./staging.gdb
-     sde_conn: C:/path/to/your.sde
+   - `config/config.yaml` (settings):
+     ```yaml
+     workspaces:
+       downloads: ./data/downloads
+       staging_gdb: ./data/staging.gdb
+       sde_conn: ./data/connections/prod.sde
 
-   geoprocess:
-     enabled: true
-     aoi: C:/path/to/aoi_fc
-     target_srid: 3006
+     geoprocess:
+       enabled: true
+       aoi_boundary: ./data/connections/municipality_boundary.shp
+       target_wkid: 3010
 
-   sources:
-     - name: nvdb_vag
-       type: rest
-       url: https://services.example.com/ArcGIS/rest/services/Vag/MapServer
-       layer_ids: [0, 1, 2]
-       include: true
-       raw:
-         use_oid_sweep: true    # Enable parallel downloading for large datasets
-         page_size: 1000        # Batch size (default: 1000)
-         max_workers: 6         # Concurrent threads (default: 6)
-   ```
+     # Optional global bbox filter applied in downloaders
+     use_bbox_filter: true
+     global_bbox:
+       coords: [585826, 6550189, 648593, 6611661]
+       crs: 3006   # 3006 | 4326 | "EPSG:3006" | "CRS84"
 
-   For large REST layers (50k+ features), enable parallel OID-batch downloading for 3-10× performance improvement. See [OID-Batch Parallelism Documentation](docs/oid-batch-parallelism.md) for details.
+     # Optional unified downloader
+     use_unified_downloader: true
+
+     # Optional cleanup controls
+     cleanup_downloads_before_run: false
+     cleanup_staging_before_run: false
+
+     # Logging (console + optional file)
+     logging:
+       level: INFO              # Console level
+       file:
+         enabled: true
+         name: etl.log          # logs/etl.log
+         level: DEBUG
+     ```
+
+   - `config/sources.yaml` (sources):
+     ```yaml
+     sources:
+       - name: nvdb_vag
+         authority: NVDB
+         type: rest
+         url: https://services.example.com/ArcGIS/rest/services/Vag/MapServer
+         raw:
+           include: ["*Väg*"]  # Optional layer name patterns
+           out_fields: "*"
+       - name: sgu_erosion
+         authority: SGU
+         type: ogc
+         url: https://api.sgu.se/oppnadata/stranderosion-kust/ogc/features/v1/
+         raw:
+           collections: ["aktiv-erosion"]
+       - name: open_data_zip
+         authority: FM
+         type: http
+         url: https://www.forsvarsmakten.se/siteassets/geodata/rikstackande-geodata.zip
+     ```
+
+   Notes:
+   - Accepts type aliases: `http|file`, `rest|rest_api`, `ogc|ogc_api`, `atom|atom_feed`, `wfs`.
+   - When `use_bbox_filter` is true, bbox/CRS propagate to the appropriate downloader semantics.
 
 ## Usage
 
@@ -105,23 +142,20 @@ python run.py
 On Windows `cmd.exe`, using ArcGIS Pro's conda Python explicitly (adjust path/env name as needed):
 
 ```cmd
-"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --process --load_sde
+"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --process --load_sde --config config/config.yaml --sources config/sources.yaml
 ```
 
 Run specific steps:
 
 ```cmd
 REM Only download
-python run.py --download
+python run.py --download --config config/config.yaml --sources config/sources.yaml
 
 REM Only process
-python run.py --process
+python run.py --process --config config/config.yaml
 
 REM Only load to SDE
-python run.py --load_sde
-
-REM Cleanup staging/downloads (when enabled)
-python run.py --cleanup
+python run.py --load_sde --config config/config.yaml
 ```
 
 > Note: If no flags are provided, all steps will run in sequence.
@@ -137,36 +171,40 @@ use_unified_downloader: true
 It honors `--authority` and `--type` filters. Example:
 
 ```cmd
-"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --authority RAA --type ogc
+"%LOCALAPPDATA%\ESRI\conda\envs\arcgispro-py3\python.exe" run.py --download --authority RAA --type ogc --config config/config.yaml --sources config/sources.yaml
 ```
 
 ### Logging
 
-- Console shows `INFO` and above by default (configured via `logging.console_level`).
-- Summary log (`logs/etl.log`) follows `logging.level` (default `WARNING`). It may be empty if no warnings/errors occur.
-- Debug log (`logs/etl.debug.log`) captures detailed output when `logging.debug_file` is set.
+- Console shows `INFO` and above by default (configured via `logging.level`).
+- Optional file log at `logs/etl.log` when `logging.file.enabled: true`.
 
-To increase verbosity and include `INFO` in the summary file, edit `config/config.yaml`:
+To configure logging, edit `config/config.yaml`:
 
 ```yaml
 logging:
-  level: "INFO"          # Root level (controls summary file)
-  console_level: "INFO"  # Console override
-  summary_file: "logs/etl.log"
-  debug_file: "logs/etl.debug.log"
+  level: INFO            # Console level
+  file:
+    enabled: true
+    name: etl.log        # logs/etl.log
+    level: DEBUG
 ```
 
 If you see no immediate output, ensure you are using the ArcGIS Pro Python interpreter. ArcPy is lazily imported so logging initializes before heavy modules load.
 
-To avoid emoji/encoding issues in Windows `cmd.exe`, console logs auto-fallback to ASCII when UTF-8 isn’t detected. You can force ASCII via:
+To avoid emoji/encoding issues in Windows `cmd.exe`, console logs auto‑fallback to ASCII when UTF‑8 isn’t detected. You can force ASCII via:
 
 ```cmd
 set OP_ETL_ASCII_CONSOLE=1
 ```
 
+### Geometry Policy (OGC/WFS)
+
+- Explicit geometry types in config are optional. Staging applies robust GeoJSON handling with dominant‑geometry filtering and magnitude checks.
+- If a dataset mixes geometries, staging keeps the dominant geometry. Document or pre‑split sources if strict per‑geometry outputs are needed.
+
 ## Roadmap
 
-- [ ] Add OGC API Features support
 - [ ] Add more geoprocessing tools
-- [ ] Add simple logging to CSV/JSON
-- [ ] Add unit tests for handlers
+- [ ] Add simple logging export to CSV/JSON
+- [ ] Expand unit tests for handlers

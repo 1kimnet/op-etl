@@ -1,5 +1,7 @@
 # OP-ETL Implementation Guide: Tasks & Code Examples
 
+> Status (2025-09-04): The live codebase has consolidated around `run.py` as the orchestrator and `etl/config.py` for configuration loading (two-file layout: `config/config.yaml` + `config/sources.yaml`). Explicit dataclass config (`etl/new_config.py`) and the alternative orchestrator (`etl/pipeline.py`) were proposal-era and are not used. Staging keeps robust GeoJSON handling with dominant-geometry filtering; explicit geometry in config is optional. This document remains as a planning and reference guide; code snippets for `new_config.py`, `simple_http.py`, `pipeline.py`, and `stage.py` are deprecated examples unless explicitly reintroduced.
+
 **Complete refactoring guide with task breakdowns and implementation examples**
 
 ## Overview & Success Metrics
