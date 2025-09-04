@@ -414,6 +414,8 @@ sources:
     bbox_crs: CRS84
     stage_sr: 4326
     target_sr: 3006
+    # Geometry type hint for simplified staging (brunnar are known to be points)
+    geometry_type: Point
 - name: Jordskred och raviner
   authority: SGU
   type: ogc
