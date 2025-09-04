@@ -1,17 +1,83 @@
 """
 Simplified staging system for OP-ETL focused on maintainability.
 Handles the 90% use case with clear, straightforward code.
+Enhanced with proper GeoJSON geometry type handling.
+
+Key Features:
+- Automatic geometry type detection and filtering for mixed-type GeoJSON files
+- Dominant geometry type analysis ensures reliable feature class creation  
+- Explicit geometry type specification in ArcPy JSONToFeatures calls
+- Coordinate validation and spatial reference consistency (projects to SWEREF99 TM)
+- Support for GPKG, GeoJSON, Shapefile, and ZIP archive formats
+- Clean error handling and descriptive logging
+
+Usage:
+    Set use_simplified_staging: true in config.yaml to use this module.
+    The enhanced staging automatically handles:
+    - Mixed geometry types in GeoJSON (filters to dominant type)
+    - Spatial reference detection and projection to SWEREF99 TM
+    - Safe feature class naming with authority prefixes
 """
 
+import json
 import logging
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
-from .sr_utils import SWEREF99_TM
+from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
 from .utils import make_arcpy_safe_name
 
 logger = logging.getLogger(__name__)
+
+
+def _analyze_geojson_geometry_types(features: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Analyze geometry types in GeoJSON features and return counts."""
+    geom_counts = {}
+    for feature in features:
+        try:
+            geom = feature.get("geometry", {})
+            geom_type = geom.get("type")
+            if geom_type:
+                geom_counts[geom_type] = geom_counts.get(geom_type, 0) + 1
+        except Exception:
+            continue
+    return geom_counts
+
+
+def _get_dominant_geometry_type(geom_counts: Dict[str, int]) -> Optional[str]:
+    """Get the most frequent geometry type from counts."""
+    if not geom_counts:
+        return None
+    return max(geom_counts.items(), key=lambda x: x[1])[0]
+
+
+def _filter_features_by_geometry_type(features: List[Dict[str, Any]], target_type: str) -> List[Dict[str, Any]]:
+    """Filter GeoJSON features to keep only those matching the target geometry type."""
+    filtered = []
+    for feature in features:
+        try:
+            geom = feature.get("geometry", {})
+            if geom.get("type") == target_type:
+                filtered.append(feature)
+        except Exception:
+            continue
+    return filtered
+
+
+def _geojson_to_arcpy_geometry_type(geojson_type: str) -> str:
+    """Map GeoJSON geometry type to ArcPy geometry type."""
+    mapping = {
+        "Point": "POINT",
+        "MultiPoint": "MULTIPOINT", 
+        "LineString": "POLYLINE",
+        "MultiLineString": "POLYLINE",
+        "Polygon": "POLYGON",
+        "MultiPolygon": "POLYGON"
+    }
+    return mapping.get(geojson_type, "")
 
 
 def stage_all_downloads(config):
@@ -131,16 +197,14 @@ def _import_gpkg(gpkg_path, authority, staging_gdb):
 
 
 def _import_geojson(geojson_path, authority, staging_gdb):
-    """Import GeoJSON file to staging GDB."""
-    import json
-
+    """Import GeoJSON file to staging GDB with proper geometry type handling."""
     import arcpy
 
     geojson_path = Path(geojson_path)
     logger.info(f"[STAGE] Processing GeoJSON: {geojson_path}")
 
     try:
-        # Read to validate format
+        # Read and validate GeoJSON format
         with open(geojson_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -148,20 +212,120 @@ def _import_geojson(geojson_path, authority, staging_gdb):
             logger.warning(f"[STAGE] Invalid GeoJSON format: {geojson_path}")
             return
 
-        # Generate target name
+        features = data.get('features', [])
+        if not features:
+            logger.warning(f"[STAGE] No features found in {geojson_path}")
+            return
+
+        # Analyze geometry types
+        geom_counts = _analyze_geojson_geometry_types(features)
+        dominant_type = _get_dominant_geometry_type(geom_counts)
+        
+        if not dominant_type:
+            logger.warning(f"[STAGE] No valid geometry types found in {geojson_path}")
+            return
+
+        logger.info(f"[STAGE] Geometry types in {geojson_path.name}: {geom_counts}")
+        logger.info(f"[STAGE] Dominant geometry type: {dominant_type}")
+
+        # Filter to dominant geometry type if mixed types present
+        total_features = len(features)
+        dominant_count = geom_counts.get(dominant_type, 0)
+        
+        if len(geom_counts) > 1:
+            logger.info(f"[STAGE] Mixed geometry types detected, filtering to {dominant_type}")
+            features = _filter_features_by_geometry_type(features, dominant_type)
+            logger.info(f"[STAGE] Filtered {total_features} -> {len(features)} features")
+        
+        if not features:
+            logger.warning(f"[STAGE] No features remaining after filtering in {geojson_path}")
+            return
+
+        # Validate coordinates if possible
+        if features:
+            first_geom = features[0].get('geometry', {})
+            coords = first_geom.get('coordinates')
+            if coords:
+                # Flatten nested coordinates to check first coordinate pair
+                flat_coords = _flatten_coordinates_simple(coords)
+                if len(flat_coords) >= 2:
+                    # Detect spatial reference from GeoJSON
+                    detected_sr = detect_sr_from_geojson(data) or WGS84_DD
+                    if not validate_coordinates_magnitude(flat_coords[:2], detected_sr):
+                        logger.error(f"[STAGE] Invalid coordinate magnitudes in {geojson_path}")
+                        return
+
+        # Create output path
         target_name = make_arcpy_safe_name(f"{authority}_{geojson_path.stem}")
+        output_fc = str(staging_gdb / target_name)
 
-        logger.info(f"[STAGE] Converting {geojson_path.name} -> {target_name}")
+        # Remove existing feature class if present
+        try:
+            if arcpy.Exists(output_fc):
+                arcpy.management.Delete(output_fc)
+        except Exception:
+            pass
 
-        # Import with SR transformation
-        arcpy.conversion.JSONToFeatures(
-            str(geojson_path), str(staging_gdb / target_name),
-            geometry_type="", spatial_reference=SWEREF99_TM
-        )
+        # Use explicit geometry type for reliable import
+        arcpy_geom_type = _geojson_to_arcpy_geometry_type(dominant_type)
+        
+        if len(geom_counts) > 1 or not arcpy_geom_type:
+            # Write filtered GeoJSON to temporary file for import
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False, encoding='utf-8') as tmp:
+                    filtered_data = {"type": "FeatureCollection", "features": features}
+                    json.dump(filtered_data, tmp, ensure_ascii=False)
+                    temp_path = tmp.name
+
+                logger.info(f"[STAGE] Converting {geojson_path.name} -> {target_name} (geometry type: {arcpy_geom_type})")
+                
+                # Import with explicit geometry type if available
+                if arcpy_geom_type:
+                    arcpy.conversion.JSONToFeatures(
+                        temp_path, output_fc,
+                        geometry_type=arcpy_geom_type, 
+                        spatial_reference=SWEREF99_TM
+                    )
+                else:
+                    arcpy.conversion.JSONToFeatures(
+                        temp_path, output_fc,
+                        spatial_reference=SWEREF99_TM
+                    )
+            finally:
+                if temp_path and Path(temp_path).exists():
+                    try:
+                        Path(temp_path).unlink()
+                    except Exception:
+                        pass
+        else:
+            # Simple case - single geometry type
+            logger.info(f"[STAGE] Converting {geojson_path.name} -> {target_name} (single type: {arcpy_geom_type})")
+            arcpy.conversion.JSONToFeatures(
+                str(geojson_path), output_fc,
+                geometry_type=arcpy_geom_type if arcpy_geom_type else "",
+                spatial_reference=SWEREF99_TM
+            )
+
+        logger.info(f"[STAGE] Successfully imported {len(features)} features to {target_name}")
 
     except Exception as e:
         logger.error(f"[STAGE] Failed to process GeoJSON {geojson_path}: {e}")
         raise
+
+
+def _flatten_coordinates_simple(coords):
+    """Simple coordinate flattening for validation."""
+    if not coords:
+        return []
+    
+    flat = []
+    for item in coords:
+        if isinstance(item, (list, tuple)):
+            flat.extend(_flatten_coordinates_simple(item))
+        else:
+            flat.append(item)
+    return flat
 
 
 def _import_shapefile(shp_path, authority, staging_gdb):
