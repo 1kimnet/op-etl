@@ -18,6 +18,18 @@ OP-ETL is a lightweight ETL pipeline for geospatial data in Esri environments. I
 - **Spatial Reference Consistency** — staging defines/projects to SWEREF99 TM (EPSG:3006); processing can reproject to a target WKID (commonly EPSG:3010)
 - **Resilient downloads** — robust REST pagination with OID sweep fallback when transfer limits are hit
 
+## Architecture
+
+**OP-ETL uses a streamlined architecture focused on maintainability:**
+
+- **`run.py`**: Main orchestrator handling logging setup, workspace management, and step execution
+- **`etl/config.py`**: Two-file configuration system (`config/config.yaml` + `config/sources.yaml`)
+- **`etl/stage_files.py`**: Robust staging with format detection and SR consistency
+- **`etl/process.py`**: AOI clipping and target reprojection
+- **`etl/load_sde.py`**: SDE loading with truncate-and-append strategy
+
+The core pipeline (orchestrator + config + processing + loading) is **864 lines of code**, prioritizing simplicity and maintainability over edge case coverage.
+
 ## Basic Workflow
 
 ```mermaid
