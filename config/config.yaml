@@ -10,6 +10,12 @@ workspaces:
 # Use the new unified downloader and dispatcher
 use_unified_downloader: true
 
+# Use simplified staging module for better maintainability
+use_simplified_staging: true
+
+# Use simplified REST downloads for better maintainability
+use_simplified_rest: true
+
 processing:
   aoi_bbox:
   - 610000

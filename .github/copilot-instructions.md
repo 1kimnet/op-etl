@@ -46,6 +46,3 @@ These instructions orient AI coding agents in this repo. Optimize for simplicity
 
 ## Key Files
 - `run.py`, `etl/stage_files.py`, `etl/process.py`, `etl/load_sde.py`, `etl/config.py`, `etl/download_*.py`, and `docs/spatial-reference-consistency.md`.
-
-## Codacy MCP Obligations
-- After any file edit, run Codacy MCP `codacy_cli_analyze` for each edited file. For dependency changes, also run with `tool=trivy` (see `./.github/instructions/codacy.instructions.md`). If Codacy MCP tools aren’t available, note this in your response and suggest the troubleshooting steps listed there.

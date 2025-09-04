@@ -199,7 +199,16 @@ def _run_download(cfg, args):
         from etl import download as unified
         unified.run(filtered_cfg, authority=args.authority, type=args.type)
     else:
-        from etl import download_atom, download_http, download_ogc, download_rest, download_wfs
+        from etl import download_atom, download_http, download_ogc, download_wfs
+
+        # Check for simplified REST downloader
+        use_simple_rest = bool(cfg.get("use_simplified_rest", False))
+        if use_simple_rest:
+            from etl import download_rest_simple as download_rest
+            logging.info("Using simplified REST downloader")
+        else:
+            from etl import download_rest
+            logging.info("Using full REST downloader")
 
         download_http.run(filtered_cfg)
         download_atom.run(filtered_cfg)
@@ -208,7 +217,13 @@ def _run_download(cfg, args):
         download_rest.run(filtered_cfg)
 
     logging.info("Starting staging process...")
-    from etl.stage_files import stage_all_downloads
+    use_simplified = bool(filtered_cfg.get("use_simplified_staging", False))
+    if use_simplified:
+        from etl.stage_simple import stage_all_downloads
+        logging.info("Using simplified staging module")
+    else:
+        from etl.stage_files import stage_all_downloads
+        logging.info("Using full staging module")
     stage_all_downloads(filtered_cfg)
 
     from etl.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
