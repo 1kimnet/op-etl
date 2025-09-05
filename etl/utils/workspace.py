@@ -53,7 +53,6 @@ def remove_geodatabase_safely(gdb_path):
     gdb_path = Path(gdb_path).resolve()
     
     if not gdb_path.exists():
-        logging.info(f"Geodatabase {gdb_path} does not exist, skipping removal")
         return True
 
     logging.info(f"Attempting to remove geodatabase: {gdb_path}")
