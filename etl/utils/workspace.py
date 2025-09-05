@@ -51,6 +51,7 @@ def remove_geodatabase_safely(gdb_path):
     """
     Safely remove a geodatabase directory with ArcPy-aware cleanup.
     """
+    gdb_path = Path(gdb_path)
     if not gdb_path.exists():
         return True
 
