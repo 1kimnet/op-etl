@@ -1,30 +1,12 @@
-from pathlib import Path
+"""Path utilities - backward compatibility module.
 
-from .utils import make_arcpy_safe_name
+This module provides backward compatibility for path utilities.
+The actual implementation is in etl.utils.paths.
+"""
 
-
-def ensure_workspaces(cfg: dict) -> None:
-    ws = cfg["workspaces"]
-
-    downloads = Path(ws["downloads"]).resolve()
-    downloads.mkdir(parents=True, exist_ok=True)
-
-    gdb_path = Path(ws["staging_gdb"]).resolve()
-    gdb_parent = gdb_path.parent
-    gdb_parent.mkdir(parents=True, exist_ok=True)
-
-    # Create FGDB if missing (lazy import arcpy)
-    try:
-        import arcpy
-        if not arcpy.Exists(str(gdb_path)):
-            arcpy.management.CreateFileGDB(str(gdb_parent), gdb_path.name)
-    except Exception:
-        # If arcpy unavailable, leave directory prepared; later steps may handle
-        pass
-
-
-def staging_path(cfg: dict, name: str) -> str:
-    """Return canonical FGDB path with ArcPy-safe feature class name."""
-    safe_name = make_arcpy_safe_name(name)
-    gdb_path = cfg['workspaces']['staging_gdb'].replace(chr(92)*2,'/').replace(chr(92),'/')
-    return f"{gdb_path}/{safe_name}"
+# Import all path utilities for backward compatibility
+try:
+    from .utils.paths import *
+except ImportError as e:
+    import logging
+    logging.warning(f"Failed to import path utilities: {e}")
