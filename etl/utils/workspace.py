@@ -12,6 +12,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
+from typing import Union
 
 
 def clear_arcpy_caches():
@@ -136,8 +137,8 @@ def remove_geodatabase_safely(gdb_path):
                     item.chmod(stat.S_IWRITE)
                     item.unlink(missing_ok=True)
 
-        # Try to remove empty directories
-        for item in sorted(gdb_path.rglob("*"), key=str, reverse=True):
+        # Try to remove empty directories, sorting by path depth for correct order
+        for item in sorted(gdb_path.rglob("*"), key=lambda p: len(p.parts), reverse=True):
             if item.is_dir() and item != gdb_path:
                 with contextlib.suppress(Exception):
                     item.rmdir()
@@ -162,22 +163,31 @@ def remove_geodatabase_safely(gdb_path):
     return False
 
 
-def create_clean_staging_gdb(staging_gdb_path):
-    """Create a fresh staging geodatabase."""
+def create_clean_staging_gdb(staging_gdb_path: Union[str, Path]) -> bool:
+    """Create a fresh staging geodatabase.
+    
+    Args:
+        staging_gdb_path: Path to staging geodatabase (string or Path object)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    # Convert to Path object to ensure compatibility
+    staging_path = Path(staging_gdb_path).resolve()
     try:
         # Lazy import to avoid issues in non-ArcPy environments
         import arcpy
         
-        parent_dir = staging_gdb_path.parent
-        gdb_name = staging_gdb_path.name
+        parent_dir = staging_path.parent
+        gdb_name = staging_path.name
         
         # Ensure parent directory exists
         parent_dir.mkdir(parents=True, exist_ok=True)
         
-        logging.info(f"Creating staging geodatabase: {staging_gdb_path}")
+        logging.info(f"Creating staging geodatabase: {staging_path}")
         arcpy.management.CreateFileGDB(str(parent_dir), gdb_name)
         
-        if staging_gdb_path.exists():
+        if staging_path.exists():
             logging.info("Successfully created staging geodatabase")
             return True
         else:

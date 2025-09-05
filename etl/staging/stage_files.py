@@ -12,7 +12,7 @@ from pathlib import Path
 from etl.utils.sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
 
 # Lazy ArcPy usage: import inside functions to avoid heavy init before logging
-from etl.utils.utils import make_arcpy_safe_name
+from ..naming_utils import make_arcpy_safe_name
 
 
 def _flatten_coordinates(coords):

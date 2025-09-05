@@ -11,6 +11,27 @@ from etl.geoprocess import process
 from etl.sde import load_sde
 from etl.staging import stage_files
 
+# Additional backward compatibility imports for utilities
+try:
+    from . import config
+except ImportError:
+    pass
+
+try:
+    from . import paths
+except ImportError:
+    pass
+
+try:
+    from . import workspace
+except ImportError:
+    pass
+
+try:
+    from . import utils
+except ImportError:
+    pass
+
 # Re-export modules at package level for backward compatibility
 __all__ = [
     'download_atom',
@@ -21,4 +42,8 @@ __all__ = [
     'process',
     'load_sde',
     'stage_files',
+    'config',
+    'paths',
+    'workspace', 
+    'utils',
 ]
