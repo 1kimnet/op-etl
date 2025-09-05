@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .utils import make_arcpy_safe_name
+from .naming_utils import make_arcpy_safe_name
 
 
 def ensure_workspaces(cfg: dict) -> None:
