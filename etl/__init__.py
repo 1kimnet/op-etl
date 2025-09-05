@@ -14,7 +14,7 @@ from etl.staging import stage_files
 # Re-export modules at package level for backward compatibility
 __all__ = [
     'download_atom',
-    'download_http', 
+    'download_http',
     'download_ogc',
     'download_rest',
     'download_wfs',
