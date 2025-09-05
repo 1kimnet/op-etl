@@ -74,6 +74,8 @@ except ImportError as e:
 
 try:
     from .utils import workspace
+    # Also make workspace available as a direct module import
+    from .utils.workspace import *
 except ImportError as e:
     import logging
     logging.warning(f"Failed to import workspace: {e}")
