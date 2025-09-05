@@ -164,8 +164,6 @@ def remove_geodatabase_safely(gdb_path):
 
 def create_clean_staging_gdb(staging_gdb_path):
     """Create a fresh staging geodatabase."""
-    staging_gdb_path = Path(staging_gdb_path)
-    
     try:
         # Lazy import to avoid issues in non-ArcPy environments
         import arcpy
