@@ -6,7 +6,6 @@ Handles only direct file downloads, leaves specialized types to their own module
 """
 
 import logging
-import re
 import time
 import urllib.error
 import urllib.request
@@ -14,28 +13,10 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from .utils import to_safe_filename
+
 # Suppress urllib3 warnings
 log = logging.getLogger(__name__)
-
-# Character mapping for Swedish characters
-CHAR_MAP = str.maketrans({
-    "å": "a", "Å": "a",
-    "ä": "a", "Ä": "a",
-    "ö": "o", "Ö": "o",
-    "é": "e", "É": "e",
-    "ü": "u", "Ü": "u",
-    "ß": "ss",
-})
-
-SAFE_RE = re.compile(r"[^a-z0-9_\-]+")
-
-def slug(s: str, maxlen: int = 63) -> str:
-    """Create safe slug from string."""
-    s = (s or "unnamed").strip().lower().translate(CHAR_MAP)
-    s = s.replace(" ", "_")
-    s = SAFE_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s[:maxlen] or "unnamed"
 
 
 def run(cfg: dict) -> None:
@@ -101,7 +82,7 @@ def process_file_source(source: dict, downloads_dir: Path) -> bool:
                 file_path = download_file(file_url, out_dir, layer)
 
                 if file_path.suffix.lower() == ".zip":
-                    extract_dir = out_dir / slug(file_path.stem)
+                    extract_dir = out_dir / to_safe_filename(file_path.stem)
                     extract_dir.mkdir(parents=True, exist_ok=True)
                     with zipfile.ZipFile(file_path, 'r') as zf:
                         zf.extractall(extract_dir)
@@ -121,7 +102,7 @@ def process_file_source(source: dict, downloads_dir: Path) -> bool:
         try:
             file_path = download_file(url, out_dir, name)
             if file_path.suffix.lower() == ".zip":
-                extract_dir = out_dir / slug(file_path.stem)
+                extract_dir = out_dir / to_safe_filename(file_path.stem)
                 extract_dir.mkdir(parents=True, exist_ok=True)
                 with zipfile.ZipFile(file_path, 'r') as zf:
                     zf.extractall(extract_dir)
@@ -149,7 +130,7 @@ def download_file(url: str, out_dir: Path, hint: str) -> Path:
     if len(original_name) <= 50 and original_name != "download":
         fname = original_name
     else:
-        base_name = slug(hint, maxlen=40)
+        base_name = to_safe_filename(hint, maxlen=40)
         fname = f"{base_name}{ext}"
 
     dst = out_dir / fname

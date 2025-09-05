@@ -31,12 +31,10 @@ import shutil
 import zipfile
 from pathlib import Path
 
+from .paths import _make_arcpy_safe_name
 from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
-from .utils import make_arcpy_safe_name
 
 logger = logging.getLogger(__name__)
-
-
 def _geojson_to_arcpy_geometry_type(geojson_type: str) -> str:
     """Map GeoJSON geometry type to ArcPy geometry type."""
     mapping = {
@@ -177,7 +175,7 @@ def _import_gpkg(gpkg_path, authority, staging_gdb):
 
         for fc_name in feature_classes:
             source_fc = str(gpkg_path / fc_name)
-            target_name = make_arcpy_safe_name(f"{authority}_{fc_name}")
+            target_name = _make_arcpy_safe_name(f"{authority}_{fc_name}")
 
             logger.info(f"[STAGE] Importing {fc_name} -> {target_name}")
 
@@ -244,7 +242,7 @@ def _import_geojson(geojson_path, authority, staging_gdb, source_config=None):
                         return
 
         # Create output path
-        target_name = make_arcpy_safe_name(f"{authority}_{geojson_path.stem}")
+        target_name = _make_arcpy_safe_name(f"{authority}_{geojson_path.stem}")
         output_fc = str(staging_gdb / target_name)
 
         # Remove existing feature class if present
@@ -298,7 +296,7 @@ def _import_shapefile(shp_path, authority, staging_gdb):
     logger.info(f"[STAGE] Processing Shapefile: {shp_path}")
 
     try:
-        target_name = make_arcpy_safe_name(f"{authority}_{shp_path.stem}")
+        target_name = _make_arcpy_safe_name(f"{authority}_{shp_path.stem}")
 
         logger.info(f"[STAGE] Converting {shp_path.name} -> {target_name}")
 

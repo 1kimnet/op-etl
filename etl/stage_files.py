@@ -9,10 +9,9 @@ import shutil
 import zipfile
 from pathlib import Path
 
+from .paths import staging_path
 from .sr_utils import SWEREF99_TM, WGS84_DD, detect_sr_from_geojson, validate_coordinates_magnitude
-
-# Lazy ArcPy usage: import inside functions to avoid heavy init before logging
-from .utils import make_arcpy_safe_name
+from .workspace import clear_staging_gdb, ensure_gdb_exists
 
 
 def _flatten_coordinates(coords):
@@ -40,7 +39,7 @@ def _dominant_geometry_type(features: list) -> str | None:
                 counts[gt] = counts.get(gt, 0) + 1
         except Exception:
             continue
-    return None if not counts else max(counts.items(), key=lambda kv: kv[1])[0]
+    return max(counts.items(), key=lambda kv: kv[1])[0] if counts else None
 
 
 def _filter_features_by_geometry_type(features: list, geom_type: str) -> list:
@@ -221,16 +220,16 @@ def stage_all_downloads(cfg: dict) -> None:
     Call this instead of stage_files.ingest_downloads()
     """
     downloads_dir = Path(cfg['workspaces']['downloads'])
-    gdb_path = cfg['workspaces']['staging_gdb']
+    gdb_path = Path(cfg['workspaces']['staging_gdb'])
 
     logging.info(f"[STAGE] Starting staging from {downloads_dir}")
 
     # Ensure staging GDB exists
-    ensure_gdb_exists(gdb_path)
+    ensure_gdb_exists(str(gdb_path))
 
     # Clear staging GDB if configured
     if cfg.get('cleanup_staging_before_run', False):
-        clear_staging_gdb(gdb_path)
+        clear_staging_gdb(str(gdb_path))
 
     imported_count = 0
 
@@ -250,7 +249,7 @@ def stage_all_downloads(cfg: dict) -> None:
         for file_path in files_found:
             safe_name = create_safe_name(file_path, authority_name)
             if import_file_to_staging(
-                file_path, gdb_path, safe_name
+                file_path, str(gdb_path), safe_name
             ):
                 imported_count += 1
                 logging.info(f"[STAGE] + {file_path.name} -> {safe_name}")
@@ -300,8 +299,9 @@ def create_safe_name(file_path: Path, authority: str) -> str:
     Example: stem 'raa_raa_ri_kulturmiljovard_mb3kap6' with authority 'RAA'
     becomes 'raa_ri_kulturmiljovard_mb3kap6'.
     """
-    norm_auth = make_arcpy_safe_name(authority)
-    norm_stem = make_arcpy_safe_name(file_path.stem)
+    from .paths import _make_arcpy_safe_name
+    norm_auth = _make_arcpy_safe_name(authority)
+    norm_stem = _make_arcpy_safe_name(file_path.stem)
 
     # Strip repeated leading authority tokens from stem
     prefix = f"{norm_auth}_"
@@ -311,11 +311,11 @@ def create_safe_name(file_path: Path, authority: str) -> str:
     if not norm_stem:
         norm_stem = "data"
 
-    return make_arcpy_safe_name(f"{norm_auth}_{norm_stem}")
+    return _make_arcpy_safe_name(f"{norm_auth}_{norm_stem}")
 
 def import_file_to_staging(file_path: Path, gdb_path: str, staging_name: str) -> bool:
     """Import any supported file type to staging GDB."""
-    out_fc = f"{gdb_path.replace(chr(92), '/')}/{staging_name}"
+    out_fc = str(staging_path({"workspaces": {"staging_gdb": gdb_path}}, staging_name))
 
     # Clean up existing feature class (best effort)
     with contextlib.suppress(Exception):
@@ -529,7 +529,7 @@ def import_geojson(geojson_path: Path, out_fc: str) -> bool:
                 try:
                     temp_data = {"type": "FeatureCollection", "features": filtered}
                     import json as _json
-                    temp_path.write_text(_json.dumps(temp_data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                    temp_path.write_text(_json.dumps(temp_data, ensure_ascii=False, separators=( ",", ":" )), encoding="utf-8")
                     json_input_path = temp_path
                     logging.info(f"[STAGE] Filtered {len(features)} -> {len(filtered)} features (keeping '{dominant}') for {geojson_path.name}")
                 except Exception as e:
@@ -684,42 +684,3 @@ def import_zip(zip_path: Path, out_fc: str) -> bool:
         if extract_dir.exists():
             with contextlib.suppress(Exception):
                 shutil.rmtree(extract_dir)
-
-def ensure_gdb_exists(gdb_path: str) -> None:
-    """Ensure staging geodatabase exists."""
-    gdb_path_obj = Path(gdb_path)
-
-    if not gdb_path_obj.exists():
-        gdb_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            import arcpy
-            arcpy.management.CreateFileGDB(
-                str(gdb_path_obj.parent),
-                gdb_path_obj.name
-            )
-        except Exception as e:
-            logging.error(f"[STAGE] Failed to create staging GDB: {e}")
-        logging.info(f"[STAGE] Created staging GDB: {gdb_path}")
-
-def clear_staging_gdb(gdb_path: str) -> None:
-    """Clear all feature classes from staging GDB."""
-    try:
-        # Use arcpy.da.Walk to list feature classes without changing workspace
-        feature_classes = []
-        import arcpy
-        for dirpath, dirnames, filenames in arcpy.da.Walk(gdb_path, datatype="FeatureClass"):
-            feature_classes.extend(filenames)
-
-        # Delete each feature class
-        for fc in feature_classes:
-            try:
-                fc_path = f"{gdb_path}/{fc}"
-                if arcpy.Exists(fc_path):
-                    arcpy.management.Delete(fc_path)
-            except Exception as e:
-                logging.debug(f"[STAGE] Failed to delete {fc}: {e}")
-
-        logging.info(f"[STAGE] Cleared {len(feature_classes)} feature classes from staging")
-
-    except Exception as e:
-        logging.warning(f"[STAGE] Failed to clear staging GDB: {e}")
