@@ -10,9 +10,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
-from .monitoring import end_monitoring_source, start_monitoring_source
-from .sr_utils import SWEREF99_TM
+from etl.utils.http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
+from etl.utils.monitoring import end_monitoring_source, start_monitoring_source
+from etl.utils.sr_utils import SWEREF99_TM
 
 log = logging.getLogger(__name__)
 

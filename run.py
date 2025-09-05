@@ -8,8 +8,8 @@ import sys
 import time
 from pathlib import Path
 
-from etl.config import ConfigError, load_config
-from etl.paths import ensure_workspaces
+from etl.utils.config import ConfigError, load_config
+from etl.utils.paths import ensure_workspaces
 
 
 def clear_arcpy_caches():
@@ -203,10 +203,10 @@ def _run_download(cfg, args):
     download_rest.run(filtered_cfg)
 
     logging.info("Starting staging process...")
-    from etl.stage_files import stage_all_downloads
+    from etl.staging.stage_files import stage_all_downloads
     stage_all_downloads(filtered_cfg)
 
-    from etl.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
+    from etl.utils.monitoring import get_error_patterns, log_pipeline_summary, save_pipeline_metrics
     log_pipeline_summary()
 
     metrics_file = Path("logs") / f"pipeline_metrics_{Path().resolve().name}_{int(time.time())}.json"
@@ -256,7 +256,7 @@ def main():
         raise SystemExit(f"Config error: {e}") from e
 
     # 2) now configure logging from YAML
-    from etl.logging_config import setup_logging
+    from etl.utils.logging_config import setup_logging
     setup_logging(cfg.get("logging"))
 
     # Suppress noisy urllib3 retry WARNINGs (e.g., connectionpool Retrying ...)

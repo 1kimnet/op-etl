@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from .download_http import slug
+from etl.downloaders.download_http import slug
 
 
 class ConfigError(Exception):

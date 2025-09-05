@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
-from .http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
-from .monitoring import end_monitoring_source, start_monitoring_source
-from .sr_utils import (
+from etl.utils.http_utils import RecursionSafeSession, safe_json_parse, validate_response_content
+from etl.utils.monitoring import end_monitoring_source, start_monitoring_source
+from etl.utils.sr_utils import (
     SWEREF99_TM,
     WGS84_DD,
     log_sr_validation_summary,

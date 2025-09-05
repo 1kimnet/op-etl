@@ -7,8 +7,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .http_utils import RecursionSafeSession, download_with_retries, safe_xml_parse, validate_response_content
-from .monitoring import end_monitoring_source, start_monitoring_source
+from etl.utils.http_utils import RecursionSafeSession, download_with_retries, safe_xml_parse, validate_response_content
+from etl.utils.monitoring import end_monitoring_source, start_monitoring_source
 
 log = logging.getLogger(__name__)
 
