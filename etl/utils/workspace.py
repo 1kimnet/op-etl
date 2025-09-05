@@ -137,7 +137,7 @@ def remove_geodatabase_safely(gdb_path):
                     item.unlink(missing_ok=True)
 
         # Try to remove empty directories
-        for item in sorted(gdb_path.rglob("*"), key=str, reverse=True):
+        for item in sorted(gdb_path.rglob("*"), key=lambda p: -len(p.parts)):
             if item.is_dir() and item != gdb_path:
                 with contextlib.suppress(Exception):
                     item.rmdir()
