@@ -6,21 +6,40 @@ dedicated directories: downloaders, staging, geoprocess, sde, and utils.
 """
 
 import sys
+import importlib
 
-# Check if we're in the refactored structure or the legacy structure
-try:
-    # Try refactored imports (for when PR #51 is merged)
-    from etl.downloaders import download_atom, download_http, download_ogc, download_rest, download_wfs
-    from etl.geoprocess import process
-    from etl.sde import load_sde
-    from etl.staging import stage_files
-    _is_refactored = True
-except ImportError:
-    # Fall back to legacy imports (current main branch structure)
-    from . import download_atom, download_http, download_ogc, download_rest, download_wfs
-    from . import process, load_sde, stage_files
-    _is_refactored = False
+# Attempt to import each module from the refactored structure if available, else fall back to legacy
+def _import_module(refactored, legacy, attr_name):
+    spec = importlib.util.find_spec(refactored)
+    if spec is not None:
+        module = importlib.import_module(refactored)
+        return getattr(module, attr_name)
+    else:
+        module = importlib.import_module(legacy, __package__)
+        return module
 
+download_atom = _import_module('etl.downloaders.download_atom', '.download_atom', 'download_atom')
+download_http = _import_module('etl.downloaders.download_http', '.download_http', 'download_http')
+download_ogc = _import_module('etl.downloaders.download_ogc', '.download_ogc', 'download_ogc')
+download_rest = _import_module('etl.downloaders.download_rest', '.download_rest', 'download_rest')
+download_wfs = _import_module('etl.downloaders.download_wfs', '.download_wfs', 'download_wfs')
+process = _import_module('etl.geoprocess.process', '.process', 'process')
+load_sde = _import_module('etl.sde.load_sde', '.load_sde', 'load_sde')
+stage_files = _import_module('etl.staging.stage_files', '.stage_files', 'stage_files')
+
+# Determine if refactored structure is used (all refactored modules found)
+_is_refactored = all(
+    importlib.util.find_spec(m) is not None for m in [
+        'etl.downloaders.download_atom',
+        'etl.downloaders.download_http',
+        'etl.downloaders.download_ogc',
+        'etl.downloaders.download_rest',
+        'etl.downloaders.download_wfs',
+        'etl.geoprocess.process',
+        'etl.sde.load_sde',
+        'etl.staging.stage_files',
+    ]
+)
 # Re-export modules at package level for backward compatibility
 __all__ = [
     'download_atom',
